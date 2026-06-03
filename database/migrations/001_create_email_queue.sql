@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS email_queue (
+  id CHAR(36) PRIMARY KEY,
+  source_app VARCHAR(100) NOT NULL,
+  recipient_email VARCHAR(255) NOT NULL,
+  subject VARCHAR(255) NOT NULL,
+  html_body MEDIUMTEXT NOT NULL,
+  text_body MEDIUMTEXT NULL,
+  priority ENUM('normal', 'high') NOT NULL DEFAULT 'normal',
+  metadata JSON NULL,
+  status ENUM('pending', 'processing', 'sent', 'failed', 'retry') NOT NULL DEFAULT 'pending',
+  attempts INT NOT NULL DEFAULT 0,
+  max_attempts INT NOT NULL DEFAULT 5,
+  next_attempt_at DATETIME NULL,
+  last_error TEXT NULL,
+  provider_message_id VARCHAR(255) NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  sent_at DATETIME NULL,
+  INDEX idx_email_queue_status_next_attempt (status, next_attempt_at),
+  INDEX idx_email_queue_source_app (source_app),
+  INDEX idx_email_queue_created_at (created_at),
+  INDEX idx_email_queue_priority_created_at (priority, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
