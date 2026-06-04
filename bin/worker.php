@@ -9,6 +9,7 @@ use CentralMailer\Logging\LoggerFactory;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\RateLimiter;
+use CentralMailer\Queue\RateLimitRepository;
 use Dotenv\Dotenv;
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -25,7 +26,7 @@ $pdo = Connection::create($env);
 $worker = new EmailWorker(
     new EmailQueueRepository($pdo),
     new SmtpEmailProvider($env),
-    new RateLimiter(new EmailQueueRepository($pdo), $env),
+    new RateLimiter(new RateLimitRepository($pdo), $env),
     $logger,
     $env
 );

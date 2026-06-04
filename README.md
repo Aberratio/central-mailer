@@ -47,6 +47,7 @@ SMTP_USER=kontakt@example.com
 SMTP_PASSWORD=secret
 SMTP_FROM_EMAIL=kontakt@example.com
 SMTP_FROM_NAME="My application"
+SMTP_DEBUG_LEVEL=0
 
 EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
@@ -71,13 +72,17 @@ Create the database:
 mysql -u root -p -e "CREATE DATABASE central_mailer CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
 
-Run the migration:
+For a new database, run the initial migration:
 
 ```bash
 mysql -u root -p central_mailer < database/migrations/001_create_email_queue.sql
 ```
 
-The project uses a single simple SQL file instead of a heavy migration system.
+For an existing database created before delivery-safety support, run:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/002_add_delivery_safety.sql
+```
 
 ## Local run
 
@@ -129,6 +134,7 @@ Documentation endpoints do not require `X-API-Key`. The API endpoints described 
 curl -X POST http://localhost:8080/emails \
   -H "Content-Type: application/json" \
   -H "X-API-Key: change-me-app-a" \
+  -H "Idempotency-Key: order-confirmation-12345" \
   -d '{
     "to": "recipient@example.com",
     "subject": "Test",
@@ -147,6 +153,10 @@ Response:
   "status": "pending"
 }
 ```
+
+`Idempotency-Key` is optional but strongly recommended. It must be unique within the calling application. Repeating the same request with the same key returns the existing message with HTTP `200`. Reusing the key for different content returns HTTP `409`.
+
+The SMTP `Message-ID` is derived from the queue ID and stays stable across retries. This reduces duplicate-delivery risk after an uncertain SMTP result, but SMTP cannot provide a strict exactly-once delivery guarantee.
 
 ### Check status
 
@@ -183,7 +193,7 @@ The worker fetches a batch limited by `EMAIL_WORKER_BATCH_SIZE` and the global r
 1. `priority = high`
 2. `created_at ASC`
 
-For MySQL/MariaDB versions that support `SELECT ... FOR UPDATE SKIP LOCKED`, the worker uses that mechanism. If the database does not support it, the fallback uses transactional `FOR UPDATE`, which is safe but can block parallel workers.
+For MySQL/MariaDB versions that support `SELECT ... FOR UPDATE SKIP LOCKED`, the worker uses that mechanism. If the database does not support it, the fallback uses transactional `FOR UPDATE`, which is safe but can block parallel workers. Each claimed message receives a processing lease, so a delayed worker cannot overwrite a status written by a newer worker.
 
 Retry uses exponential backoff: 60s, 120s, 240s, 480s, up to a maximum of 3600s.
 
@@ -196,7 +206,7 @@ EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
 ```
 
-The worker counts `sent` records from the last `EMAIL_RATE_LIMIT_WINDOW_MINUTES` minutes. If the limit is reached, it does not fetch more emails and waits until the next cycle.
+Before each send attempt, the worker atomically reserves a rate-limit slot in the database. Reservations are serialized across all workers and count for the configured rolling window, including failed or uncertain SMTP attempts. If the limit is reached, the claimed message is returned to the queue without increasing its attempt count.
 
 ## Logging
 
@@ -205,7 +215,7 @@ Logs are written to:
 - `storage/logs/app.log`
 - `storage/logs/worker.log`
 
-Technical events are logged: queued messages, send attempts, success, errors, attempt count, final status, and rate limiting. SMTP passwords, full HTML bodies, and metadata are not logged.
+Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, and rate limiting. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
 
 ## CyberFolks/SeoHost SMTP configuration
 

@@ -22,18 +22,18 @@ final class EmailController
     {
         $payload = $this->payload($request);
         $sourceApp = (string) $request->getAttribute('sourceApp');
-        $id = $this->queueService->enqueue($sourceApp, $payload);
+        $result = $this->queueService->enqueue($sourceApp, $payload, $request->getHeaderLine('Idempotency-Key'));
 
-        return $this->json(['id' => $id, 'status' => 'pending'], 201);
+        return $this->json(['id' => $result->id, 'status' => $result->status], $result->created ? 201 : 200);
     }
 
     public function test(ServerRequestInterface $request): ResponseInterface
     {
         $payload = $this->payload($request);
         $sourceApp = (string) $request->getAttribute('sourceApp');
-        $id = $this->queueService->enqueueTest($sourceApp, $payload);
+        $result = $this->queueService->enqueueTest($sourceApp, $payload, $request->getHeaderLine('Idempotency-Key'));
 
-        return $this->json(['id' => $id, 'status' => 'pending'], 201);
+        return $this->json(['id' => $result->id, 'status' => $result->status], $result->created ? 201 : 200);
     }
 
     /** @param array<string, string> $args */

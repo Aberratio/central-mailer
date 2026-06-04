@@ -17,26 +17,29 @@ final class EmailQueueService
     }
 
     /** @param array<string, mixed> $payload */
-    public function enqueue(string $sourceApp, array $payload): string
+    public function enqueue(string $sourceApp, array $payload, ?string $idempotencyKey = null): EnqueueResult
     {
         $validated = $this->validator->validateQueuePayload($payload);
-        $id = $this->repository->insert([
+        $idempotencyKey = $this->validateIdempotencyKey($idempotencyKey);
+        $result = $this->repository->insert([
             ...$validated,
             'sourceApp' => $sourceApp,
+            'idempotencyKey' => $idempotencyKey,
         ]);
 
-        $this->logger->info('Email queued', [
-            'id' => $id,
+        $this->logger->info($result->created ? 'Email queued' : 'Email enqueue replayed', [
+            'id' => $result->id,
             'sourceApp' => $sourceApp,
             'recipient' => $validated['to'],
             'priority' => $validated['priority'],
+            'idempotentReplay' => !$result->created,
         ]);
 
-        return $id;
+        return $result;
     }
 
     /** @param array<string, mixed> $payload */
-    public function enqueueTest(string $sourceApp, array $payload): string
+    public function enqueueTest(string $sourceApp, array $payload, ?string $idempotencyKey = null): EnqueueResult
     {
         $validated = $this->validator->validateTestPayload($payload);
 
@@ -47,6 +50,19 @@ final class EmailQueueService
             'text' => 'To jest testowa wiadomosc dodana do kolejki centralnej uslugi mailowej.',
             'priority' => 'normal',
             'metadata' => ['type' => 'test'],
-        ]);
+        ], $idempotencyKey);
+    }
+
+    private function validateIdempotencyKey(?string $idempotencyKey): ?string
+    {
+        if ($idempotencyKey === null || $idempotencyKey === '') {
+            return null;
+        }
+
+        if (strlen($idempotencyKey) > 255 || preg_match('/^[\x21-\x7E]+$/', $idempotencyKey) !== 1) {
+            throw new \InvalidArgumentException('Idempotency-Key must contain 1 to 255 visible ASCII characters');
+        }
+
+        return $idempotencyKey;
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Http;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Queue\IdempotencyConflictException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 use Slim\App;
@@ -23,7 +24,11 @@ final class ErrorMiddleware
                     'path' => (string) $request->getUri()->getPath(),
                 ]);
 
-                $statusCode = $exception instanceof \InvalidArgumentException ? 400 : 500;
+                $statusCode = match (true) {
+                    $exception instanceof IdempotencyConflictException => 409,
+                    $exception instanceof \InvalidArgumentException => 400,
+                    default => 500,
+                };
 
                 $payload = ['error' => $statusCode === 500 ? 'Internal server error' : $exception->getMessage()];
                 if ($displayErrorDetails) {
