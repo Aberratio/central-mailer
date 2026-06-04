@@ -84,7 +84,7 @@ final class EmailQueueService
             'subject' => 'Test centralnej uslugi mailowej',
             'html' => '<p>To jest testowa wiadomosc dodana do kolejki centralnej uslugi mailowej.</p>',
             'text' => 'To jest testowa wiadomosc dodana do kolejki centralnej uslugi mailowej.',
-            'priority' => 'normal',
+            'priority' => $validated['priority'],
             'metadata' => ['type' => 'test'],
         ], $idempotencyKey);
     }

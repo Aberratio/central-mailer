@@ -32,7 +32,7 @@ final class EmailRequestValidatorTest extends TestCase
 
         $result = $validator->validateTestPayload(['to' => 'recipient@no-mail.invalid']);
 
-        self::assertSame(['to' => 'recipient@no-mail.invalid'], $result);
+        self::assertSame(['to' => 'recipient@no-mail.invalid', 'priority' => 'normal'], $result);
         self::assertSame(0, DnsStub::$mxLookupCount);
         self::assertSame(0, DnsStub::$addressLookupCount);
     }
@@ -44,7 +44,7 @@ final class EmailRequestValidatorTest extends TestCase
 
         $result = $validator->validateTestPayload(['to' => 'recipient@deliverable.test']);
 
-        self::assertSame(['to' => 'recipient@deliverable.test'], $result);
+        self::assertSame(['to' => 'recipient@deliverable.test', 'priority' => 'normal'], $result);
         self::assertSame(1, DnsStub::$mxLookupCount);
         self::assertSame(0, DnsStub::$addressLookupCount);
     }
@@ -77,7 +77,7 @@ final class EmailRequestValidatorTest extends TestCase
 
         $result = $validator->validateTestPayload(['to' => 'recipient@deliverable.test']);
 
-        self::assertSame(['to' => 'recipient@deliverable.test'], $result);
+        self::assertSame(['to' => 'recipient@deliverable.test', 'priority' => 'normal'], $result);
         self::assertSame(1, DnsStub::$addressLookupCount);
     }
 
@@ -89,6 +89,18 @@ final class EmailRequestValidatorTest extends TestCase
             'to' => 'developer@internal.test',
             'subject' => 'Technical alert',
             'html' => '<p>Alert</p>',
+            'priority' => 'technical',
+        ]);
+
+        self::assertSame('technical', $result['priority']);
+    }
+
+    public function testAcceptsTechnicalPriorityForTestEmail(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateTestPayload([
+            'to' => 'developer@internal.test',
             'priority' => 'technical',
         ]);
 

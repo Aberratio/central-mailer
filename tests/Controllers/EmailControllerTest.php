@@ -41,6 +41,7 @@ final class EmailControllerTest extends DatabaseTestCase
 
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('<message-id@mailer.test>', $payload['providerMessageId']);
+        self::assertSame('normal', $payload['priority']);
     }
 
     public function testCreateReplaysRequestWithSameIdempotencyKey(): void
@@ -130,6 +131,42 @@ final class EmailControllerTest extends DatabaseTestCase
 
         self::assertSame(201, $response->getStatusCode());
         self::assertCount(2, $payload['emails']);
+    }
+
+    public function testCreateStoresTechnicalPriority(): void
+    {
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/emails')
+            ->withAttribute('sourceApp', 'app-a')
+            ->withParsedBody([
+                'to' => 'developer@deliverable.test',
+                'subject' => 'Technical alert',
+                'html' => '<p>Technical alert</p>',
+                'priority' => 'technical',
+            ]);
+
+        $response = $this->controller()->create($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('technical', $this->fetchQueueRow($payload['id'])['priority']);
+    }
+
+    public function testTestEndpointStoresTechnicalPriority(): void
+    {
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/emails/test')
+            ->withAttribute('sourceApp', 'app-a')
+            ->withParsedBody([
+                'to' => 'developer@deliverable.test',
+                'priority' => 'technical',
+            ]);
+
+        $response = $this->controller()->test($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('technical', $this->fetchQueueRow($payload['id'])['priority']);
     }
 
     private function controller(): EmailController

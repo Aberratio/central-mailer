@@ -138,4 +138,116 @@ final class EmailWorkerTest extends DatabaseTestCase
             "SELECT COUNT(*) FROM email_events WHERE email_id = '$emailId' AND event_type = 'sent'"
         )->fetchColumn());
     }
+
+    public function testStandardWorkerDoesNotSendTechnicalEmail(): void
+    {
+        $technicalId = $this->insertQueueRow(['priority' => 'technical']);
+        $provider = new class implements EmailProviderInterface {
+            public int $sendCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sendCount++;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+
+        $this->worker($provider)->runOnce();
+
+        self::assertSame(0, $provider->sendCount);
+        self::assertSame('pending', $this->fetchQueueRow($technicalId)['status']);
+    }
+
+    public function testTechnicalWorkerSendsOnlyTechnicalEmailsInFifoOrder(): void
+    {
+        $standardId = $this->insertQueueRow([
+            'id' => 'standard-oldest',
+            'priority' => 'normal',
+            'created_at' => '2026-01-01 09:00:00',
+        ]);
+        $firstTechnicalId = $this->insertQueueRow([
+            'id' => 'technical-first',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $secondTechnicalId = $this->insertQueueRow([
+            'id' => 'technical-second',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            /** @var list<string> */
+            public array $sentIds = [];
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sentIds[] = $message->id;
+
+                return new EmailSendResult('<' . $message->id . '@gmail.test>');
+            }
+        };
+
+        $this->worker($provider, 'technical', ['EMAIL_WORKER_BATCH_SIZE' => '2'])->runOnce();
+
+        self::assertSame([$firstTechnicalId, $secondTechnicalId], $provider->sentIds);
+        self::assertSame('pending', $this->fetchQueueRow($standardId)['status']);
+        self::assertSame('sent', $this->fetchQueueRow($firstTechnicalId)['status']);
+        self::assertSame('sent', $this->fetchQueueRow($secondTechnicalId)['status']);
+    }
+
+    public function testTechnicalWorkerRetryBlocksLaterTechnicalEmail(): void
+    {
+        $firstTechnicalId = $this->insertQueueRow([
+            'id' => 'technical-failing',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $secondTechnicalId = $this->insertQueueRow([
+            'id' => 'technical-blocked',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            /** @var list<string> */
+            public array $attemptedIds = [];
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->attemptedIds[] = $message->id;
+
+                throw new \RuntimeException('Temporary Gmail SMTP failure');
+            }
+        };
+
+        $this->worker($provider, 'technical', ['EMAIL_WORKER_BATCH_SIZE' => '2'])->runOnce();
+
+        self::assertSame([$firstTechnicalId], $provider->attemptedIds);
+        self::assertSame('retry', $this->fetchQueueRow($firstTechnicalId)['status']);
+        self::assertSame('pending', $this->fetchQueueRow($secondTechnicalId)['status']);
+    }
+
+    /**
+     * @param array<string, string> $envValues
+     */
+    private function worker(
+        EmailProviderInterface $provider,
+        string $queue = 'standard',
+        array $envValues = []
+    ): EmailWorker {
+        $env = new Env([
+            'EMAIL_WORKER_BATCH_SIZE' => '1',
+            ...$envValues,
+        ]);
+
+        return new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            $queue
+        );
+    }
 }

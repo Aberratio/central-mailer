@@ -64,6 +64,7 @@ final class EmailController
             'sourceApp' => $row['source_app'],
             'to' => $row['recipient_email'],
             'subject' => $row['subject'],
+            'priority' => $row['priority'],
             'attempts' => (int) $row['attempts'],
             'lastError' => $row['last_error'],
             'providerMessageId' => $row['provider_message_id'],

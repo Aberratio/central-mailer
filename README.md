@@ -283,7 +283,7 @@ curl -X POST http://localhost:8080/emails/test \
   -d '{"to": "recipient@example.com"}'
 ```
 
-The test endpoint adds the message to the normal queue. It does not send it directly.
+The test endpoint does not send directly. It uses the normal queue by default, or the technical FIFO queue when the request contains `"priority": "technical"`.
 
 ## Message statuses
 
