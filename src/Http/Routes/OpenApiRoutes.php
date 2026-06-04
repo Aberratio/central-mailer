@@ -389,6 +389,12 @@ HTML;
                                 'format' => 'email',
                                 'example' => 'recipient@example.com',
                             ],
+                            'priority' => [
+                                'type' => 'string',
+                                'enum' => ['normal', 'high', 'technical'],
+                                'default' => 'normal',
+                                'description' => 'technical trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
+                            ],
                         ],
                     ],
                     'EmailQueuedResponse' => [
@@ -407,7 +413,7 @@ HTML;
                     ],
                     'EmailStatusResponse' => [
                         'type' => 'object',
-                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'attempts', 'createdAt'],
+                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'createdAt'],
                         'properties' => [
                             'id' => [
                                 'type' => 'string',
@@ -427,6 +433,10 @@ HTML;
                             ],
                             'subject' => [
                                 'type' => 'string',
+                            ],
+                            'priority' => [
+                                'type' => 'string',
+                                'enum' => ['normal', 'high', 'technical'],
                             ],
                             'attempts' => [
                                 'type' => 'integer',

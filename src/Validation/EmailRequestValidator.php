@@ -29,7 +29,7 @@ final class EmailRequestValidator
         $subject = $this->requiredString($payload['subject'] ?? null, 'subject');
         $html = $this->requiredString($payload['html'] ?? null, 'html');
         $text = $this->optionalString($payload['text'] ?? null, 'text');
-        $priority = $payload['priority'] ?? 'normal';
+        $priority = $this->priority($payload['priority'] ?? 'normal');
         $metadata = $payload['metadata'] ?? null;
         $attachments = $this->attachments($payload['attachments'] ?? []);
 
@@ -43,10 +43,6 @@ final class EmailRequestValidator
 
         if ($text !== null && strlen($text) > self::MAX_TEXT_BYTES) {
             throw new \InvalidArgumentException('Text body is too large');
-        }
-
-        if (!in_array($priority, ['normal', 'high', 'technical'], true)) {
-            throw new \InvalidArgumentException('Priority must be normal, high or technical');
         }
 
         if ($metadata !== null && !is_array($metadata)) {
@@ -126,7 +122,19 @@ final class EmailRequestValidator
     /** @param array<string, mixed> $payload */
     public function validateTestPayload(array $payload): array
     {
-        return ['to' => $this->email($payload['to'] ?? null)];
+        return [
+            'to' => $this->email($payload['to'] ?? null),
+            'priority' => $this->priority($payload['priority'] ?? 'normal'),
+        ];
+    }
+
+    private function priority(mixed $value): string
+    {
+        if (!is_string($value) || !in_array($value, ['normal', 'high', 'technical'], true)) {
+            throw new \InvalidArgumentException('Priority must be normal, high or technical');
+        }
+
+        return $value;
     }
 
     private function email(mixed $value): string

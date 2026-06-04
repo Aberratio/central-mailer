@@ -174,7 +174,7 @@ final class EmailQueueRepository
     public function findForSourceApp(string $id, string $sourceApp): ?array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT q.id, q.status, q.source_app, q.recipient_email, COALESCE(q.subject, m.subject) AS subject,
+            'SELECT q.id, q.status, q.source_app, q.recipient_email, COALESCE(q.subject, m.subject) AS subject, q.priority,
                     q.attempts, q.last_error, q.provider_message_id, q.created_at, q.sent_at, q.batch_id
              FROM email_queue q
              LEFT JOIN email_messages m ON m.id = q.message_id
