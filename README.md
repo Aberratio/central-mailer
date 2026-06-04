@@ -90,7 +90,7 @@ composer serve
 or:
 
 ```bash
-php -S 0.0.0.0:8080 -t public
+php -S 0.0.0.0:8080 -t public public/router.php
 ```
 
 Worker:
@@ -172,7 +172,7 @@ The test endpoint adds the message to the normal queue. It does not send it dire
 
 - `pending` - the message is waiting in the queue.
 - `processing` - the worker locked the record and is trying to send the message.
-- `sent` - the message was sent.
+- `sent` - the sender SMTP server accepted the message. Final mailbox delivery can still fail later on the recipient side.
 - `retry` - sending failed, but it will be retried after `next_attempt_at`.
 - `failed` - `max_attempts` was exceeded.
 

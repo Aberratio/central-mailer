@@ -11,6 +11,11 @@ final class EmailRequestValidator
     private const MAX_SUBJECT_LENGTH = 255;
     private const MAX_HTML_BYTES = 1_000_000;
     private const MAX_TEXT_BYTES = 1_000_000;
+    private const NON_DELIVERABLE_DOMAINS = [
+        'example.com',
+        'example.net',
+        'example.org',
+    ];
 
     public function __construct(private readonly Env $env)
     {
@@ -69,7 +74,33 @@ final class EmailRequestValidator
             throw new \InvalidArgumentException('Recipient email is invalid');
         }
 
+        $this->validateRecipientDomain($email);
+
         return $email;
+    }
+
+    private function validateRecipientDomain(string $email): void
+    {
+        $domain = strtolower((string) substr(strrchr($email, '@') ?: '', 1));
+        if ($domain === '' || in_array($domain, self::NON_DELIVERABLE_DOMAINS, true)) {
+            throw new \InvalidArgumentException('Recipient email domain cannot receive email');
+        }
+
+        if (!$this->env->bool('EMAIL_VALIDATE_RECIPIENT_MX', true)) {
+            return;
+        }
+
+        $mxRecords = dns_get_record($domain, DNS_MX) ?: [];
+        foreach ($mxRecords as $record) {
+            $target = strtolower(rtrim((string) ($record['target'] ?? ''), '.'));
+            if ($target === '') {
+                throw new \InvalidArgumentException('Recipient email domain cannot receive email');
+            }
+        }
+
+        if ($mxRecords === [] && !checkdnsrr($domain, 'A') && !checkdnsrr($domain, 'AAAA')) {
+            throw new \InvalidArgumentException('Recipient email domain has no mail server');
+        }
     }
 
     private function requiredString(mixed $value, string $field): string

@@ -37,7 +37,7 @@ final class EmailController
     }
 
     /** @param array<string, string> $args */
-    public function show(ServerRequestInterface $request, array $args): ResponseInterface
+    public function show(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
     {
         $sourceApp = (string) $request->getAttribute('sourceApp');
         $row = $this->repository->findForSourceApp($args['id'], $sourceApp);
@@ -54,6 +54,7 @@ final class EmailController
             'subject' => $row['subject'],
             'attempts' => (int) $row['attempts'],
             'lastError' => $row['last_error'],
+            'providerMessageId' => $row['provider_message_id'],
             'createdAt' => $row['created_at'],
             'sentAt' => $row['sent_at'],
         ]);

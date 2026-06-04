@@ -1,4 +1,5 @@
 /.env
 /vendor/
+/.phpunit.cache/
 /storage/logs/*.log
 /storage/logs/cron.log

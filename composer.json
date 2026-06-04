@@ -21,8 +21,17 @@
       "CentralMailer\\": "src/"
     }
   },
+  "autoload-dev": {
+    "psr-4": {
+      "CentralMailer\\Tests\\": "tests/"
+    }
+  },
   "scripts": {
-    "serve": "php -S 0.0.0.0:8080 -t public",
-    "worker": "php bin/worker.php"
+    "serve": "php -S 0.0.0.0:8080 -t public public/router.php",
+    "worker": "php bin/worker.php",
+    "test": "phpunit"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.5.50"
   }
 }

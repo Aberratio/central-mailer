@@ -22,6 +22,8 @@ final class EmailWorker
 
     public function runOnce(): void
     {
+        $this->releaseStaleProcessing();
+
         $remaining = $this->rateLimiter->remaining();
         if ($remaining <= 0) {
             $this->logger->info('Email rate limit reached', [
@@ -33,10 +35,13 @@ final class EmailWorker
         }
 
         $batchSize = min($this->env->int('EMAIL_WORKER_BATCH_SIZE', 20), $remaining);
-        $emails = $this->repository->claimBatch($batchSize);
+        for ($i = 0; $i < $batchSize; $i++) {
+            $emails = $this->repository->claimBatch(1);
+            if ($emails === []) {
+                return;
+            }
 
-        foreach ($emails as $row) {
-            $this->sendOne($row);
+            $this->sendOne($emails[0]);
         }
     }
 
@@ -95,5 +100,22 @@ final class EmailWorker
         $delaySeconds = min(3600, 60 * (2 ** max(0, $attempts - 1)));
 
         return (new \DateTimeImmutable(sprintf('+%d seconds', $delaySeconds)))->format('Y-m-d H:i:s');
+    }
+
+    private function releaseStaleProcessing(): void
+    {
+        $timeoutSeconds = $this->env->int('EMAIL_PROCESSING_TIMEOUT_SECONDS', 300);
+        $olderThan = (new \DateTimeImmutable(sprintf('-%d seconds', $timeoutSeconds)))->format('Y-m-d H:i:s');
+        $released = $this->repository->releaseStaleProcessing(
+            $olderThan,
+            sprintf('Email processing timed out after %d seconds', $timeoutSeconds)
+        );
+
+        if ($released > 0) {
+            $this->logger->warning('Released stale processing emails', [
+                'count' => $released,
+                'timeoutSeconds' => $timeoutSeconds,
+            ]);
+        }
     }
 }

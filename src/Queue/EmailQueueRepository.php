@@ -46,7 +46,7 @@ final class EmailQueueRepository
     public function findForSourceApp(string $id, string $sourceApp): ?array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, status, source_app, recipient_email, subject, attempts, last_error, created_at, sent_at
+            'SELECT id, status, source_app, recipient_email, subject, attempts, last_error, provider_message_id, created_at, sent_at
              FROM email_queue
              WHERE id = :id AND source_app = :source_app'
         );
@@ -87,7 +87,7 @@ final class EmailQueueRepository
     {
         $stmt = $this->pdo->prepare(
             'UPDATE email_queue
-             SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at, last_error = NULL
+             SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at, next_attempt_at = NULL, last_error = NULL
              WHERE id = :id'
         );
         $now = self::now();
@@ -125,6 +125,28 @@ final class EmailQueueRepository
         $stmt->execute(['since' => $since]);
 
         return (int) $stmt->fetchColumn();
+    }
+
+    public function releaseStaleProcessing(string $olderThan, string $error): int
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE email_queue
+             SET status = CASE WHEN attempts + 1 >= max_attempts THEN "failed" ELSE "retry" END,
+                 attempts = attempts + 1,
+                 next_attempt_at = CASE WHEN attempts + 1 >= max_attempts THEN NULL ELSE :next_attempt_at END,
+                 last_error = :last_error,
+                 updated_at = :updated_at
+             WHERE status = "processing" AND updated_at < :older_than'
+        );
+        $now = self::now();
+        $stmt->execute([
+            'next_attempt_at' => $now,
+            'last_error' => mb_substr($error, 0, 2000),
+            'updated_at' => $now,
+            'older_than' => $olderThan,
+        ]);
+
+        return $stmt->rowCount();
     }
 
     /** @return list<string> */
