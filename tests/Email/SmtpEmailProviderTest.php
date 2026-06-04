@@ -62,6 +62,22 @@ final class SmtpEmailProviderTest extends TestCase
         self::assertSame('Global sender', $property->getValue($provider)->senderName);
     }
 
+    public function testRejectsUnencryptedSmtpConfiguration(): void
+    {
+        $provider = new SmtpEmailProvider(new Env([
+            'SMTP_HOST' => 'smtp.example.test',
+            'SMTP_USER' => 'user',
+            'SMTP_PASSWORD' => 'password',
+            'SMTP_FROM_EMAIL' => 'sender@example.test',
+            'SMTP_SECURE' => 'none',
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('SMTP_SECURE must be tls or ssl');
+
+        (new ReflectionMethod($provider, 'mailer'))->invoke($provider);
+    }
+
     private function messageIdDomain(SmtpEmailProvider $provider): string
     {
         return (new ReflectionMethod($provider, 'messageIdDomain'))->invoke($provider);

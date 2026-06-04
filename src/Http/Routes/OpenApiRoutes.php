@@ -14,6 +14,9 @@ final class OpenApiRoutes
     public static function register(App $app): void
     {
         $container = $app->getContainer();
+        if (!$container->get(Env::class)->bool('APP_DOCS_ENABLED', true)) {
+            return;
+        }
 
         $app->get('/openapi.json', function ($request, ResponseInterface $response) use ($container): ResponseInterface {
             $env = $container->get(Env::class);
@@ -30,7 +33,7 @@ final class OpenApiRoutes
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Central Mailer API Docs</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css">
   <style>
     body { margin: 0; background: #f7f7f7; }
     .swagger-ui .topbar { display: none; }
@@ -38,7 +41,7 @@ final class OpenApiRoutes
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
   <script>
     const specUrl = window.location.pathname.replace(/\/docs\/?$/, '/openapi.json');
 
@@ -46,7 +49,7 @@ final class OpenApiRoutes
       url: specUrl,
       dom_id: '#swagger-ui',
       deepLinking: true,
-      persistAuthorization: true
+      persistAuthorization: false
     });
   </script>
 </body>
@@ -167,6 +170,7 @@ HTML;
                             '400' => ['$ref' => '#/components/responses/ValidationError'],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
                             '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
+                            '429' => ['$ref' => '#/components/responses/TooManyRequests'],
                             '413' => ['$ref' => '#/components/responses/RequestTooLarge'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
@@ -212,6 +216,7 @@ HTML;
                             '400' => ['$ref' => '#/components/responses/ValidationError'],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
                             '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
+                            '429' => ['$ref' => '#/components/responses/TooManyRequests'],
                             '413' => ['$ref' => '#/components/responses/RequestTooLarge'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
@@ -620,6 +625,15 @@ HTML;
                             'application/json' => [
                                 'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
                                 'example' => ['error' => 'Request body is too large'],
+                            ],
+                        ],
+                    ],
+                    'TooManyRequests' => [
+                        'description' => 'Limit przyjmowania wiadomosci lub pojemnosc kolejki klienta zostaly osiagniete.',
+                        'content' => [
+                            'application/json' => [
+                                'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
+                                'example' => ['error' => 'Email enqueue rate limit reached'],
                             ],
                         ],
                     ],

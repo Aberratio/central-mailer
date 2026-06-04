@@ -191,5 +191,19 @@ abstract class DatabaseTestCase extends TestCase
                 reserved_at TEXT NOT NULL
             )'
         );
+        $this->pdo->exec(
+            'CREATE TABLE email_enqueue_rate_limit_lock (
+                id INTEGER PRIMARY KEY,
+                updated_at TEXT NOT NULL
+            )'
+        );
+        $this->pdo->exec("INSERT INTO email_enqueue_rate_limit_lock (id, updated_at) VALUES (1, '2026-01-01 00:00:00')");
+        $this->pdo->exec(
+            'CREATE TABLE email_enqueue_rate_limit_reservations (
+                id TEXT PRIMARY KEY,
+                source_app TEXT NOT NULL,
+                reserved_at TEXT NOT NULL
+            )'
+        );
     }
 }

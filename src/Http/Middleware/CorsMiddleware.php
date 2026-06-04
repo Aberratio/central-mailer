@@ -19,14 +19,28 @@ final class CorsMiddleware implements MiddlewareInterface
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        $origin = $this->env->string('APP_CORS_ORIGIN', '*');
+        $requestOrigin = $request->getHeaderLine('Origin');
+        $allowedOrigins = array_values(array_filter(array_map(
+            'trim',
+            explode(',', $this->env->string('APP_CORS_ORIGIN', '*'))
+        )));
         $response = $request->getMethod() === 'OPTIONS'
             ? new Response(204)
             : $handler->handle($request);
 
-        return $response
-            ->withHeader('Access-Control-Allow-Origin', $origin)
+        $response = $response
             ->withHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Idempotency-Key')
             ->withHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+
+        if (in_array('*', $allowedOrigins, true)) {
+            return $response->withHeader('Access-Control-Allow-Origin', '*');
+        }
+
+        $response = $response->withAddedHeader('Vary', 'Origin');
+        if ($requestOrigin !== '' && in_array($requestOrigin, $allowedOrigins, true)) {
+            return $response->withHeader('Access-Control-Allow-Origin', $requestOrigin);
+        }
+
+        return $response;
     }
 }

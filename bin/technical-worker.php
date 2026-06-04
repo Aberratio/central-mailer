@@ -5,6 +5,7 @@ declare(strict_types=1);
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Client\ClientRepository;
 use CentralMailer\Config\Env;
+use CentralMailer\Config\ProductionConfigValidator;
 use CentralMailer\Database\Connection;
 use CentralMailer\Email\GmailSmtpEmailProvider;
 use CentralMailer\Logging\LoggerFactory;
@@ -22,6 +23,7 @@ if (file_exists($root . '/.env')) {
 }
 
 $env = new Env($_ENV);
+ProductionConfigValidator::validate($env);
 $logDir = $env->string('LOG_DIR', $root . '/storage/logs');
 $logger = LoggerFactory::create($env, rtrim($logDir, '/\\') . '/technical-worker.log');
 $pdo = Connection::create($env);

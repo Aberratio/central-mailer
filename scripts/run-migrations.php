@@ -8,10 +8,10 @@ use Dotenv\Dotenv;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
-$options = getopt('', ['baseline', 'dry-run', 'no-lock', 'help']);
+$options = getopt('', ['baseline', 'baseline-through:', 'dry-run', 'no-lock', 'help']);
 
 if (isset($options['help'])) {
-    echo "Usage: php scripts/run-migrations.php [--dry-run] [--baseline] [--no-lock]\n";
+    echo "Usage: php scripts/run-migrations.php [--dry-run] [--baseline] [--baseline-through=FILE] [--no-lock]\n";
     exit(0);
 }
 
@@ -24,7 +24,17 @@ $pdo = Connection::create(new Env($_ENV));
 $migrationFiles = glob($root . '/database/migrations/*.sql') ?: [];
 sort($migrationFiles, SORT_STRING);
 $isDryRun = isset($options['dry-run']);
+$baselineThrough = isset($options['baseline-through']) ? (string) $options['baseline-through'] : null;
 $lockName = 'central_mailer_schema_migrations';
+
+if ($baselineThrough !== null && !isset($options['baseline'])) {
+    fwrite(STDERR, "--baseline-through requires --baseline.\n");
+    exit(4);
+}
+if ($baselineThrough !== null && !in_array($baselineThrough, array_map('basename', $migrationFiles), true)) {
+    fwrite(STDERR, "Unknown baseline migration: {$baselineThrough}\n");
+    exit(4);
+}
 
 if (!isset($options['no-lock'])) {
     $lock = $pdo->prepare('SELECT GET_LOCK(:lock_name, 30)');
@@ -102,6 +112,11 @@ $insert = $pdo->prepare(
 
 foreach ($pending as $migration) {
     if (isset($options['baseline'])) {
+        if ($baselineThrough !== null && strcmp($migration['name'], $baselineThrough) > 0) {
+            echo "Left pending after baseline: {$migration['name']}\n";
+            continue;
+        }
+
         $insert->execute(['migration' => $migration['name'], 'checksum' => $migration['checksum']]);
         echo "Baselined migration: {$migration['name']}\n";
         continue;
