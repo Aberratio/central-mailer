@@ -18,7 +18,7 @@ final class Connection
             $env->string('DB_DATABASE')
         );
 
-        return new PDO($dsn, $env->string('DB_USERNAME'), $env->string('DB_PASSWORD'), [
+        return new PDO($dsn, $env->string('DB_USERNAME'), $env->string('DB_PASSWORD', ''), [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => false,

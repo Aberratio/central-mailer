@@ -40,8 +40,10 @@ final class OpenApiRoutes
   <div id="swagger-ui"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
   <script>
+    const specUrl = window.location.pathname.replace(/\/docs\/?$/, '/openapi.json');
+
     window.ui = SwaggerUIBundle({
-      url: '/openapi.json',
+      url: specUrl,
       dom_id: '#swagger-ui',
       deepLinking: true,
       persistAuthorization: true
