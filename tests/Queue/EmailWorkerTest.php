@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace CentralMailer\Tests\Queue;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Email\EmailBrandConfig;
+use CentralMailer\Email\EmailBranding;
 use CentralMailer\Email\EmailMessage;
 use CentralMailer\Email\EmailProviderInterface;
 use CentralMailer\Email\EmailSendResult;
@@ -137,6 +139,47 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame(1, (int) $this->pdo->query(
             "SELECT COUNT(*) FROM email_events WHERE email_id = '$emailId' AND event_type = 'sent'"
         )->fetchColumn());
+    }
+
+    public function testAppliesGlobalBrandingBeforeSending(): void
+    {
+        $this->insertQueueRow([
+            'html_body' => '<p>Body</p>',
+            'text_body' => 'Body',
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            public ?EmailMessage $message = null;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->message = $message;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '1']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            'standard',
+            new EmailBranding(new EmailBrandConfig(
+                brandName: 'Example',
+                footerHtml: '<div>Footer</div>',
+                footerText: 'Footer'
+            ))
+        );
+
+        $worker->runOnce();
+
+        self::assertNotNull($provider->message);
+        self::assertStringContainsString('Example', $provider->message->html);
+        self::assertStringContainsString('Footer', $provider->message->html);
+        self::assertSame("Body\n\n--\nFooter\nExample", $provider->message->text);
     }
 
     public function testStandardWorkerDoesNotSendTechnicalEmail(): void

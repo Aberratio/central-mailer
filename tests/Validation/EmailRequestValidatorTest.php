@@ -23,16 +23,17 @@ final class EmailRequestValidatorTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Recipient email domain cannot receive email');
 
-        $validator->validateTestPayload(['to' => 'recipient@example.com']);
+        $validator->validateQueuePayload($this->payload('recipient@example.com'));
     }
 
     public function testSkipsDnsLookupsWhenValidationIsDisabled(): void
     {
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
 
-        $result = $validator->validateTestPayload(['to' => 'recipient@no-mail.invalid']);
+        $result = $validator->validateQueuePayload($this->payload('recipient@no-mail.invalid'));
 
-        self::assertSame(['to' => 'recipient@no-mail.invalid', 'priority' => 'normal'], $result);
+        self::assertSame('recipient@no-mail.invalid', $result['to']);
+        self::assertSame('normal', $result['priority']);
         self::assertSame(0, DnsStub::$mxLookupCount);
         self::assertSame(0, DnsStub::$addressLookupCount);
     }
@@ -42,9 +43,10 @@ final class EmailRequestValidatorTest extends TestCase
         DnsStub::$mxRecords = [['target' => 'mail.deliverable.test.']];
         $validator = new EmailRequestValidator(new Env([]));
 
-        $result = $validator->validateTestPayload(['to' => 'recipient@deliverable.test']);
+        $result = $validator->validateQueuePayload($this->payload('recipient@deliverable.test'));
 
-        self::assertSame(['to' => 'recipient@deliverable.test', 'priority' => 'normal'], $result);
+        self::assertSame('recipient@deliverable.test', $result['to']);
+        self::assertSame('normal', $result['priority']);
         self::assertSame(1, DnsStub::$mxLookupCount);
         self::assertSame(0, DnsStub::$addressLookupCount);
     }
@@ -57,7 +59,7 @@ final class EmailRequestValidatorTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Recipient email domain cannot receive email');
 
-        $validator->validateTestPayload(['to' => 'recipient@deliverable.test']);
+        $validator->validateQueuePayload($this->payload('recipient@deliverable.test'));
     }
 
     public function testRejectsDomainWithoutMxOrAddressRecord(): void
@@ -67,7 +69,7 @@ final class EmailRequestValidatorTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Recipient email domain has no mail server');
 
-        $validator->validateTestPayload(['to' => 'recipient@no-mail.invalid']);
+        $validator->validateQueuePayload($this->payload('recipient@no-mail.invalid'));
     }
 
     public function testAcceptsAddressRecordFallbackWhenMxRecordIsMissing(): void
@@ -75,9 +77,10 @@ final class EmailRequestValidatorTest extends TestCase
         DnsStub::$hasARecord = true;
         $validator = new EmailRequestValidator(new Env([]));
 
-        $result = $validator->validateTestPayload(['to' => 'recipient@deliverable.test']);
+        $result = $validator->validateQueuePayload($this->payload('recipient@deliverable.test'));
 
-        self::assertSame(['to' => 'recipient@deliverable.test', 'priority' => 'normal'], $result);
+        self::assertSame('recipient@deliverable.test', $result['to']);
+        self::assertSame('normal', $result['priority']);
         self::assertSame(1, DnsStub::$addressLookupCount);
     }
 
@@ -95,15 +98,13 @@ final class EmailRequestValidatorTest extends TestCase
         self::assertSame('technical', $result['priority']);
     }
 
-    public function testAcceptsTechnicalPriorityForTestEmail(): void
+    /** @return array<string, mixed> */
+    private function payload(string $to): array
     {
-        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
-
-        $result = $validator->validateTestPayload([
-            'to' => 'developer@internal.test',
-            'priority' => 'technical',
-        ]);
-
-        self::assertSame('technical', $result['priority']);
+        return [
+            'to' => $to,
+            'subject' => 'Subject',
+            'html' => '<p>Body</p>',
+        ];
     }
 }

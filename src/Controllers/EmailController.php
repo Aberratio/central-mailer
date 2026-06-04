@@ -27,15 +27,6 @@ final class EmailController
         return $this->json(['id' => $result->id, 'status' => $result->status], $result->created ? 201 : 200);
     }
 
-    public function test(ServerRequestInterface $request): ResponseInterface
-    {
-        $payload = $this->payload($request);
-        $sourceApp = (string) $request->getAttribute('sourceApp');
-        $result = $this->queueService->enqueueTest($sourceApp, $payload, $request->getHeaderLine('Idempotency-Key'));
-
-        return $this->json(['id' => $result->id, 'status' => $result->status], $result->created ? 201 : 200);
-    }
-
     public function batch(ServerRequestInterface $request): ResponseInterface
     {
         $payload = $this->payload($request);

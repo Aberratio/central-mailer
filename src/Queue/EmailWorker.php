@@ -7,12 +7,15 @@ namespace CentralMailer\Queue;
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
 use CentralMailer\Email\EmailAttachment;
+use CentralMailer\Email\EmailBranding;
 use CentralMailer\Email\EmailMessage;
 use CentralMailer\Email\EmailProviderInterface;
 use Psr\Log\LoggerInterface;
 
 final class EmailWorker
 {
+    private readonly EmailBranding $branding;
+
     public function __construct(
         private readonly EmailQueueRepository $repository,
         private readonly EmailProviderInterface $provider,
@@ -20,11 +23,14 @@ final class EmailWorker
         private readonly LoggerInterface $logger,
         private readonly Env $env,
         private readonly AttachmentStorage $attachmentStorage,
-        private readonly string $queue = 'standard'
+        private readonly string $queue = 'standard',
+        ?EmailBranding $branding = null
     ) {
         if (!in_array($this->queue, ['standard', 'technical'], true)) {
             throw new \InvalidArgumentException('Queue must be standard or technical');
         }
+
+        $this->branding = $branding ?? new EmailBranding();
     }
 
     public function runOnce(): void
@@ -83,14 +89,15 @@ final class EmailWorker
                 ),
                 $this->repository->findAttachments((string) $row['id'])
             );
-            $result = $this->provider->send(new EmailMessage(
+            $message = new EmailMessage(
                 $row['id'],
                 $row['recipient_email'],
                 $row['resolved_subject'],
                 $row['resolved_html_body'],
                 $row['resolved_text_body'],
                 $attachments
-            ));
+            );
+            $result = $this->provider->send($this->branding->apply($message));
 
             $marked = $this->repository->markSent(
                 $row['id'],

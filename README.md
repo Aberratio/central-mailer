@@ -47,7 +47,6 @@ SMTP_SECURE=tls
 SMTP_USER=kontakt@example.com
 SMTP_PASSWORD=secret
 SMTP_FROM_EMAIL=kontakt@example.com
-SMTP_FROM_NAME="My application"
 SMTP_DEBUG_LEVEL=0
 
 GMAIL_SMTP_USER=developer@gmail.com
@@ -55,7 +54,6 @@ GMAIL_SMTP_APP_PASSWORD=google-app-password
 GMAIL_SMTP_PORT=587
 GMAIL_SMTP_SECURE=tls
 GMAIL_FROM_EMAIL=developer@gmail.com
-GMAIL_FROM_NAME="Developer notifications"
 TECHNICAL_EMAIL_FALLBACK_TO_STANDARD=true
 
 EMAIL_RATE_LIMIT_COUNT=100
@@ -226,6 +224,17 @@ The SMTP `Message-ID` is derived from the queue ID and stays stable across retri
 
 Set `"priority": "technical"` to route a message to the separate Gmail SMTP FIFO queue. `normal` and `high` messages are never claimed by the technical worker, and the standard SMTP worker never claims `technical` messages.
 
+### Global sender identity and branding
+
+The sender name, reply-to address, logo, and footer are defined once in
+`src/Email/EmailBrandConfig.php`. The worker applies this branding immediately before sending, so it covers
+single messages, batches, retries, and technical messages without changing the original content stored in the
+queue.
+
+The actual sender email addresses remain in `.env` as `SMTP_FROM_EMAIL` and `GMAIL_FROM_EMAIL`, because SMTP
+servers usually require an address authorized for the account. A mailbox avatar shown by Gmail or another email
+client cannot be set in the message itself; configure the mailbox profile or domain-level BIMI separately.
+
 ### Add an attachment
 
 Attachments are optional and intended for exceptional cases such as QR-code PNG files:
@@ -274,17 +283,6 @@ curl -X GET http://localhost:8080/emails/{id} \
 An application can read only its own messages. The `app-a` API key will not see emails added by `app-b`.
 
 Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and provider acceptance.
-
-### Add a test email
-
-```bash
-curl -X POST http://localhost:8080/emails/test \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: change-me-app-a" \
-  -d '{"to": "recipient@example.com"}'
-```
-
-The test endpoint does not send directly. It uses the normal queue by default, or the technical FIFO queue when the request contains `"priority": "technical"`.
 
 ## Message statuses
 
@@ -352,7 +350,6 @@ SMTP_SECURE=tls
 SMTP_USER=kontakt@example.com
 SMTP_PASSWORD=mailbox-password
 SMTP_FROM_EMAIL=kontakt@example.com
-SMTP_FROM_NAME="My application"
 ```
 
 The login is the full email address, and the password is the mailbox password. `SMTP_FROM_EMAIL` should be the mailbox address or an address allowed by the hosting provider.

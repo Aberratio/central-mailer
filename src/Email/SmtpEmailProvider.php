@@ -11,8 +11,10 @@ final class SmtpEmailProvider implements EmailProviderInterface
 {
     private ?PHPMailer $mailer = null;
 
-    public function __construct(private readonly Env $env)
-    {
+    public function __construct(
+        private readonly Env $env,
+        private readonly EmailBrandConfig $brandConfig = new EmailBrandConfig()
+    ) {
     }
 
     public function send(EmailMessage $message): EmailSendResult
@@ -77,7 +79,8 @@ final class SmtpEmailProvider implements EmailProviderInterface
         }
 
         $mail->CharSet = 'UTF-8';
-        $mail->setFrom($this->env->string('SMTP_FROM_EMAIL'), $this->env->string('SMTP_FROM_NAME', ''));
+        $mail->setFrom($this->env->string('SMTP_FROM_EMAIL'), $this->brandConfig->senderName);
+        $this->addReplyTo($mail);
         $mail->isHTML(true);
 
         return $this->mailer = $mail;
@@ -99,5 +102,15 @@ final class SmtpEmailProvider implements EmailProviderInterface
     private function messageId(EmailMessage $message): string
     {
         return sprintf('<%s@%s>', $message->id, $this->messageIdDomain());
+    }
+
+    private function addReplyTo(PHPMailer $mail): void
+    {
+        if ($this->brandConfig->replyToEmail !== null) {
+            $mail->addReplyTo(
+                $this->brandConfig->replyToEmail,
+                $this->brandConfig->replyToName ?? $this->brandConfig->senderName
+            );
+        }
     }
 }
