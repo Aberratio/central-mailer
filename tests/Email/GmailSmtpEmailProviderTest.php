@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Tests\Email;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Email\EmailBrandConfig;
 use CentralMailer\Email\GmailSmtpEmailProvider;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
@@ -26,6 +27,15 @@ final class GmailSmtpEmailProviderTest extends TestCase
         $provider = new GmailSmtpEmailProvider(new Env(['GMAIL_FROM_EMAIL' => 'developer@gmail.com']));
 
         self::assertSame('gmail.com', $this->messageIdDomain($provider));
+    }
+
+    public function testUsesSenderNameFromBrandConfig(): void
+    {
+        $provider = new GmailSmtpEmailProvider(new Env([]), new EmailBrandConfig(senderName: 'Global sender'));
+
+        $property = new \ReflectionProperty($provider, 'brandConfig');
+
+        self::assertSame('Global sender', $property->getValue($provider)->senderName);
     }
 
     private function messageIdDomain(GmailSmtpEmailProvider $provider): string

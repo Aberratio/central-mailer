@@ -61,31 +61,73 @@ HTML;
     /** @return array<string, mixed> */
     private static function spec(Env $env): array
     {
+        $maxBatchRecipients = $env->int('EMAIL_BATCH_MAX_RECIPIENTS', 1000);
+        $maxAttachmentCount = $env->int('EMAIL_ATTACHMENT_MAX_COUNT', 5);
+        $maxAttachmentBytes = $env->int('EMAIL_ATTACHMENT_MAX_TOTAL_BYTES', 5_000_000);
+        $maxRequestBodyBytes = $env->int('APP_MAX_REQUEST_BODY_BYTES', 12_000_000);
+        $allowedAttachmentTypes = array_values(array_filter(array_map(
+            'trim',
+            explode(',', $env->string('EMAIL_ATTACHMENT_ALLOWED_MIME_TYPES', 'image/png,application/pdf'))
+        )));
+
         return [
             'openapi' => '3.0.3',
             'info' => [
                 'title' => 'Central Mailer API',
                 'version' => '1.0.0',
-                'description' => 'Centralna usluga kolejkowanej wysylki e-mail przez SMTP.',
+                'description' => implode("\n\n", [
+                    'Centralna usluga kolejkowanej wysylki e-mail przez SMTP.',
+                    'Kazdy klient uwierzytelnia sie naglowkiem `X-API-Key`. Klucz okresla aplikacje zrodlowa, a aplikacja moze odczytywac tylko wlasne wiadomosci.',
+                    'Przyjecie wiadomosci do kolejki nie oznacza jej dostarczenia. Status `sent` potwierdza przyjecie przez serwer SMTP, ale nie gwarantuje dostarczenia do skrzynki odbiorcy.',
+                    'Domeny `example.com`, `example.net` i `example.org` sa odrzucane, poniewaz nie moga odbierac poczty.',
+                    sprintf('Maksymalny rozmiar calego body requestu w tym srodowisku wynosi %d bajtow.', $maxRequestBodyBytes),
+                ]),
             ],
             'servers' => [
                 [
                     'url' => $env->string('APP_URL', 'http://localhost:8080'),
+                    'description' => 'Biezace srodowisko API',
                 ],
             ],
+            'security' => [['ApiKeyAuth' => []]],
             'tags' => [
                 [
                     'name' => 'Emails',
-                    'description' => 'Kolejkowanie wiadomosci i odczyt statusu.',
+                    'description' => 'Kolejkowanie wiadomosci, odczyt statusu i historia prob wysylki.',
+                ],
+                [
+                    'name' => 'System',
+                    'description' => 'Publiczne endpointy diagnostyczne.',
                 ],
             ],
             'paths' => [
+                '/health' => [
+                    'get' => [
+                        'tags' => ['System'],
+                        'summary' => 'Sprawdza dostepnosc API i bazy danych',
+                        'description' => 'Publiczny health check. Zwraca sukces tylko wtedy, gdy API moze wykonac zapytanie do bazy danych.',
+                        'operationId' => 'getHealth',
+                        'security' => [],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'API i polaczenie z baza danych dzialaja.',
+                                'content' => [
+                                    'application/json' => [
+                                        'schema' => ['$ref' => '#/components/schemas/HealthResponse'],
+                                        'example' => ['status' => 'ok'],
+                                    ],
+                                ],
+                            ],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
                 '/emails' => [
                     'post' => [
                         'tags' => ['Emails'],
                         'summary' => 'Dodaje e-mail do kolejki',
+                        'description' => 'Tworzy pojedyncza wiadomosc. Tresc i odbiorca sa walidowane przed zapisaniem, a wysylka odbywa sie asynchronicznie przez worker.',
                         'operationId' => 'createEmail',
-                        'security' => [['ApiKeyAuth' => []]],
                         'parameters' => [
                             ['$ref' => '#/components/parameters/IdempotencyKey'],
                         ],
@@ -95,12 +137,12 @@ HTML;
                                 'application/json' => [
                                     'schema' => ['$ref' => '#/components/schemas/EmailCreateRequest'],
                                     'example' => [
-                                        'to' => 'recipient@example.com',
-                                        'subject' => 'Test',
-                                        'html' => '<p>To jest test</p>',
-                                        'text' => 'To jest test',
+                                        'to' => 'recipient@company.pl',
+                                        'subject' => 'Potwierdzenie zamowienia',
+                                        'html' => '<p>Dziekujemy za zamowienie.</p>',
+                                        'text' => 'Dziekujemy za zamowienie.',
                                         'priority' => 'normal',
-                                        'metadata' => ['userId' => 123],
+                                        'metadata' => ['orderId' => 12345],
                                     ],
                                 ],
                             ],
@@ -125,6 +167,7 @@ HTML;
                             '400' => ['$ref' => '#/components/responses/ValidationError'],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
                             '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
+                            '413' => ['$ref' => '#/components/responses/RequestTooLarge'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
                     ],
@@ -133,8 +176,8 @@ HTML;
                     'post' => [
                         'tags' => ['Emails'],
                         'summary' => 'Dodaje paczke e-maili ze wspolna trescia',
+                        'description' => 'Tworzy osobna wiadomosc dla kazdego odbiorcy, ale przechowuje wspolny temat i tresc tylko raz. Batch nie obsluguje zalacznikow.',
                         'operationId' => 'createEmailBatch',
-                        'security' => [['ApiKeyAuth' => []]],
                         'parameters' => [
                             ['$ref' => '#/components/parameters/IdempotencyKey'],
                         ],
@@ -143,6 +186,17 @@ HTML;
                             'content' => [
                                 'application/json' => [
                                     'schema' => ['$ref' => '#/components/schemas/EmailBatchRequest'],
+                                    'example' => [
+                                        'subject' => 'Newsletter',
+                                        'html' => '<p>Nowosci w tym miesiacu.</p>',
+                                        'text' => 'Nowosci w tym miesiacu.',
+                                        'priority' => 'normal',
+                                        'metadata' => ['campaign' => 'june-2026'],
+                                        'recipients' => [
+                                            ['to' => 'one@company.pl', 'metadata' => ['userId' => 1]],
+                                            ['to' => 'two@company.pl', 'metadata' => ['userId' => 2]],
+                                        ],
+                                    ],
                                 ],
                             ],
                         ],
@@ -158,48 +212,7 @@ HTML;
                             '400' => ['$ref' => '#/components/responses/ValidationError'],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
                             '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
-                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
-                        ],
-                    ],
-                ],
-                '/emails/test' => [
-                    'post' => [
-                        'tags' => ['Emails'],
-                        'summary' => 'Dodaje testowy e-mail do kolejki',
-                        'operationId' => 'createTestEmail',
-                        'security' => [['ApiKeyAuth' => []]],
-                        'parameters' => [
-                            ['$ref' => '#/components/parameters/IdempotencyKey'],
-                        ],
-                        'requestBody' => [
-                            'required' => true,
-                            'content' => [
-                                'application/json' => [
-                                    'schema' => ['$ref' => '#/components/schemas/EmailTestRequest'],
-                                    'example' => ['to' => 'recipient@example.com'],
-                                ],
-                            ],
-                        ],
-                        'responses' => [
-                            '200' => [
-                                'description' => 'Powtorzone zadanie z tym samym Idempotency-Key. Zwraca istniejaca wiadomosc.',
-                                'content' => [
-                                    'application/json' => [
-                                        'schema' => ['$ref' => '#/components/schemas/EmailQueuedResponse'],
-                                    ],
-                                ],
-                            ],
-                            '201' => [
-                                'description' => 'Testowa wiadomosc zostala dodana do kolejki.',
-                                'content' => [
-                                    'application/json' => [
-                                        'schema' => ['$ref' => '#/components/schemas/EmailQueuedResponse'],
-                                    ],
-                                ],
-                            ],
-                            '400' => ['$ref' => '#/components/responses/ValidationError'],
-                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
-                            '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
+                            '413' => ['$ref' => '#/components/responses/RequestTooLarge'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
                     ],
@@ -208,19 +221,10 @@ HTML;
                     'get' => [
                         'tags' => ['Emails'],
                         'summary' => 'Pobiera status e-maila',
+                        'description' => 'Zwraca biezacy stan wiadomosci nalezacej do aplikacji rozpoznanej po kluczu API.',
                         'operationId' => 'getEmail',
-                        'security' => [['ApiKeyAuth' => []]],
                         'parameters' => [
-                            [
-                                'name' => 'id',
-                                'in' => 'path',
-                                'required' => true,
-                                'schema' => [
-                                    'type' => 'string',
-                                    'format' => 'uuid',
-                                ],
-                                'description' => 'Identyfikator wiadomosci zwrocony przy dodaniu do kolejki.',
-                            ],
+                            ['$ref' => '#/components/parameters/EmailId'],
                         ],
                         'responses' => [
                             '200' => [
@@ -241,8 +245,8 @@ HTML;
                     'get' => [
                         'tags' => ['Emails'],
                         'summary' => 'Pobiera historie statusow i prob wysylki',
+                        'description' => 'Zwraca chronologiczna historie zdarzen wiadomosci, w tym kolejkowanie, proby wysylki, retry, rate limiting i wynik SMTP.',
                         'operationId' => 'getEmailEvents',
-                        'security' => [['ApiKeyAuth' => []]],
                         'parameters' => [
                             ['$ref' => '#/components/parameters/EmailId'],
                         ],
@@ -264,9 +268,10 @@ HTML;
                         'name' => 'Idempotency-Key',
                         'in' => 'header',
                         'required' => false,
-                        'description' => 'Unikalny klucz zadania w obrebie aplikacji. Powtorzenie identycznego zadania zwraca ten sam e-mail.',
+                        'description' => 'Zalecany unikalny klucz zadania w obrebie aplikacji. Powtorzenie identycznego zadania zwraca ten sam wynik z HTTP 200. Uzycie klucza dla innej tresci zwraca HTTP 409. Dozwolone sa widoczne znaki ASCII.',
                         'schema' => [
                             'type' => 'string',
+                            'minLength' => 1,
                             'maxLength' => 255,
                             'example' => 'order-confirmation-12345',
                         ],
@@ -279,6 +284,8 @@ HTML;
                             'type' => 'string',
                             'format' => 'uuid',
                         ],
+                        'description' => 'Identyfikator wiadomosci zwrocony przez POST /emails lub w odpowiedzi batch.',
+                        'example' => '550e8400-e29b-41d4-a716-446655440000',
                     ],
                 ],
                 'securitySchemes' => [
@@ -286,77 +293,120 @@ HTML;
                         'type' => 'apiKey',
                         'in' => 'header',
                         'name' => 'X-API-Key',
+                        'description' => 'Klucz klienta API. Okresla aplikacje zrodlowa, jej limity i zakres widocznosci wiadomosci.',
                     ],
                 ],
                 'schemas' => [
+                    'HealthResponse' => [
+                        'type' => 'object',
+                        'required' => ['status'],
+                        'properties' => [
+                            'status' => [
+                                'type' => 'string',
+                                'enum' => ['ok'],
+                                'example' => 'ok',
+                            ],
+                        ],
+                    ],
                     'EmailCreateRequest' => [
                         'type' => 'object',
+                        'description' => 'Pojedyncza wiadomosc e-mail. Pole `from` nie jest obslugiwane; nadawca jest konfigurowany centralnie.',
                         'required' => ['to', 'subject', 'html'],
                         'properties' => [
                             'to' => [
                                 'type' => 'string',
                                 'format' => 'email',
-                                'example' => 'recipient@example.com',
+                                'description' => 'Adres odbiorcy. Domena musi moc odbierac poczte; domeny example.com, example.net i example.org sa odrzucane.',
+                                'example' => 'recipient@company.pl',
                             ],
                             'subject' => [
                                 'type' => 'string',
                                 'maxLength' => 255,
-                                'example' => 'Test',
+                                'description' => 'Niepusty temat wiadomosci, maksymalnie 255 znakow.',
+                                'example' => 'Potwierdzenie zamowienia',
                             ],
                             'html' => [
                                 'type' => 'string',
                                 'maxLength' => 1000000,
-                                'example' => '<p>To jest test</p>',
+                                'description' => 'Wymagana, niepusta tresc HTML. Limit wynosi 1 000 000 bajtow.',
+                                'example' => '<p>Dziekujemy za zamowienie.</p>',
                             ],
                             'text' => [
                                 'type' => 'string',
                                 'nullable' => true,
                                 'maxLength' => 1000000,
-                                'example' => 'To jest test',
+                                'description' => 'Opcjonalna wersja tekstowa. Limit wynosi 1 000 000 bajtow.',
+                                'example' => 'Dziekujemy za zamowienie.',
                             ],
                             'priority' => [
                                 'type' => 'string',
                                 'enum' => ['normal', 'high', 'technical'],
                                 'default' => 'normal',
-                                'description' => 'technical trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
+                                'description' => '`high` ma pierwszenstwo przed `normal`. `technical` trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
                             ],
                             'metadata' => [
                                 'type' => 'object',
                                 'nullable' => true,
                                 'additionalProperties' => true,
-                                'example' => ['userId' => 123],
+                                'description' => 'Opcjonalne dane klienta przechowywane razem z wiadomoscia. Zakodowany JSON nie moze przekroczyc 64 000 bajtow.',
+                                'example' => ['orderId' => 12345],
                             ],
                             'attachments' => [
                                 'type' => 'array',
+                                'maxItems' => $maxAttachmentCount,
+                                'description' => sprintf(
+                                    'Opcjonalne zalaczniki. Maksymalnie %d plikow i %d bajtow lacznie po dekodowaniu Base64. Dozwolone typy MIME: %s.',
+                                    $maxAttachmentCount,
+                                    $maxAttachmentBytes,
+                                    implode(', ', $allowedAttachmentTypes)
+                                ),
                                 'items' => ['$ref' => '#/components/schemas/EmailAttachmentRequest'],
                             ],
                         ],
                     ],
                     'EmailAttachmentRequest' => [
                         'type' => 'object',
+                        'description' => 'Zalacznik zakodowany w Base64. Serwis rozpoznaje rzeczywisty MIME type z zawartosci, nie z nazwy pliku.',
                         'required' => ['filename', 'contentBase64'],
                         'properties' => [
-                            'filename' => ['type' => 'string', 'maxLength' => 255, 'example' => 'qr.png'],
-                            'contentBase64' => ['type' => 'string', 'format' => 'byte'],
+                            'filename' => [
+                                'type' => 'string',
+                                'maxLength' => 255,
+                                'description' => 'Nazwa pliku bez sciezki i znakow sterujacych.',
+                                'example' => 'qr.png',
+                            ],
+                            'contentBase64' => [
+                                'type' => 'string',
+                                'format' => 'byte',
+                                'description' => 'Pelna zawartosc pliku zakodowana jako poprawny Base64.',
+                            ],
                         ],
                     ],
                     'EmailBatchRequest' => [
                         'type' => 'object',
+                        'description' => 'Wspolna tresc wysylana jako osobne wiadomosci do wielu odbiorcow. Zalaczniki nie sa obslugiwane.',
                         'required' => ['subject', 'html', 'recipients'],
                         'properties' => [
-                            'subject' => ['type' => 'string', 'maxLength' => 255],
-                            'html' => ['type' => 'string', 'maxLength' => 1000000],
-                            'text' => ['type' => 'string', 'nullable' => true, 'maxLength' => 1000000],
+                            'subject' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Wspolny, niepusty temat.'],
+                            'html' => ['type' => 'string', 'maxLength' => 1000000, 'description' => 'Wspolna, niepusta tresc HTML. Limit wynosi 1 000 000 bajtow.'],
+                            'text' => ['type' => 'string', 'nullable' => true, 'maxLength' => 1000000, 'description' => 'Opcjonalna wspolna wersja tekstowa. Limit wynosi 1 000 000 bajtow.'],
                             'priority' => [
                                 'type' => 'string',
                                 'enum' => ['normal', 'high', 'technical'],
                                 'default' => 'normal',
-                                'description' => 'technical trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
+                                'description' => '`high` ma pierwszenstwo przed `normal`. `technical` trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
                             ],
-                            'metadata' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
+                            'metadata' => [
+                                'type' => 'object',
+                                'nullable' => true,
+                                'additionalProperties' => true,
+                                'description' => 'Wspolne metadata dla wszystkich wiadomosci, maksymalnie 64 000 bajtow jako JSON.',
+                            ],
                             'recipients' => [
                                 'type' => 'array',
                                 'minItems' => 1,
+                                'maxItems' => $maxBatchRecipients,
+                                'description' => sprintf('Lista odbiorcow. Limit dla tego srodowiska: %d.', $maxBatchRecipients),
                                 'items' => ['$ref' => '#/components/schemas/EmailBatchRecipient'],
                             ],
                         ],
@@ -365,55 +415,55 @@ HTML;
                         'type' => 'object',
                         'required' => ['to'],
                         'properties' => [
-                            'to' => ['type' => 'string', 'format' => 'email'],
-                            'metadata' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
+                            'to' => [
+                                'type' => 'string',
+                                'format' => 'email',
+                                'description' => 'Adres odbiorcy z domena zdolna do odbioru poczty.',
+                                'example' => 'recipient@company.pl',
+                            ],
+                            'metadata' => [
+                                'type' => 'object',
+                                'nullable' => true,
+                                'additionalProperties' => true,
+                                'description' => 'Metadata tylko dla tego odbiorcy, maksymalnie 64 000 bajtow jako JSON.',
+                            ],
                         ],
                     ],
                     'EmailBatchResponse' => [
                         'type' => 'object',
+                        'description' => 'Wynik utworzenia batcha. Kazdy element `emails` jest osobna wiadomoscia z wlasnym identyfikatorem.',
                         'required' => ['id', 'emails'],
                         'properties' => [
-                            'id' => ['type' => 'string', 'format' => 'uuid'],
+                            'id' => ['type' => 'string', 'format' => 'uuid', 'description' => 'Identyfikator batcha.'],
                             'emails' => [
                                 'type' => 'array',
                                 'items' => ['$ref' => '#/components/schemas/EmailQueuedResponse'],
                             ],
                         ],
                     ],
-                    'EmailTestRequest' => [
-                        'type' => 'object',
-                        'required' => ['to'],
-                        'properties' => [
-                            'to' => [
-                                'type' => 'string',
-                                'format' => 'email',
-                                'example' => 'recipient@example.com',
-                            ],
-                            'priority' => [
-                                'type' => 'string',
-                                'enum' => ['normal', 'high', 'technical'],
-                                'default' => 'normal',
-                                'description' => 'technical trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
-                            ],
-                        ],
-                    ],
                     'EmailQueuedResponse' => [
                         'type' => 'object',
+                        'description' => 'Potwierdzenie zapisania wiadomosci w kolejce albo wynik idempotentnego powtorzenia.',
                         'required' => ['id', 'status'],
                         'properties' => [
                             'id' => [
                                 'type' => 'string',
                                 'format' => 'uuid',
+                                'description' => 'Identyfikator uzywany do odczytu statusu i zdarzen.',
+                                'example' => '550e8400-e29b-41d4-a716-446655440000',
                             ],
                             'status' => [
                                 'type' => 'string',
                                 'enum' => ['pending', 'processing', 'sent', 'retry', 'failed'],
+                                'description' => 'Biezacy status. Nowa wiadomosc zwykle ma status `pending`.',
+                                'example' => 'pending',
                             ],
                         ],
                     ],
                     'EmailStatusResponse' => [
                         'type' => 'object',
-                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'createdAt'],
+                        'description' => 'Biezacy stan wiadomosci. Pola nullable sa zawsze zwracane, ale moga nie miec jeszcze wartosci.',
+                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'lastError', 'providerMessageId', 'createdAt', 'sentAt', 'batchId'],
                         'properties' => [
                             'id' => [
                                 'type' => 'string',
@@ -422,9 +472,11 @@ HTML;
                             'status' => [
                                 'type' => 'string',
                                 'enum' => ['pending', 'processing', 'sent', 'retry', 'failed'],
+                                'description' => '`pending`: oczekuje; `processing`: worker wysyla; `retry`: oczekuje na kolejna probe; `sent`: SMTP przyjal; `failed`: zakonczono proby.',
                             ],
                             'sourceApp' => [
                                 'type' => 'string',
+                                'description' => 'Aplikacja zrodlowa ustalona na podstawie klucza API.',
                                 'example' => 'app-a',
                             ],
                             'to' => [
@@ -437,14 +489,22 @@ HTML;
                             'priority' => [
                                 'type' => 'string',
                                 'enum' => ['normal', 'high', 'technical'],
+                                'description' => 'Aktualna kolejka priorytetu. Po fallbacku technicznym moze zmienic sie z `technical` na `normal`.',
                             ],
                             'attempts' => [
                                 'type' => 'integer',
                                 'minimum' => 0,
+                                'description' => 'Liczba zakonczonych niepowodzeniem prob wysylki w aktualnej kolejce.',
                             ],
                             'lastError' => [
                                 'type' => 'string',
                                 'nullable' => true,
+                                'description' => 'Ostatni blad wysylki, jezeli wystapil.',
+                            ],
+                            'providerMessageId' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'description' => 'Stabilny SMTP Message-ID po przyjeciu wiadomosci przez provider.',
                             ],
                             'createdAt' => [
                                 'type' => 'string',
@@ -454,11 +514,13 @@ HTML;
                                 'type' => 'string',
                                 'format' => 'date-time',
                                 'nullable' => true,
+                                'description' => 'Czas przyjecia wiadomosci przez serwer SMTP.',
                             ],
                             'batchId' => [
                                 'type' => 'string',
                                 'format' => 'uuid',
                                 'nullable' => true,
+                                'description' => 'Identyfikator batcha albo null dla pojedynczej wiadomosci.',
                             ],
                         ],
                     ],
@@ -475,15 +537,29 @@ HTML;
                     ],
                     'EmailEvent' => [
                         'type' => 'object',
-                        'required' => ['type', 'status', 'attempt', 'createdAt'],
+                        'description' => 'Pojedyncze zdarzenie cyklu zycia wiadomosci.',
+                        'required' => ['type', 'status', 'attempt', 'errorCode', 'errorMessage', 'providerMessageId', 'details', 'createdAt'],
                         'properties' => [
-                            'type' => ['type' => 'string'],
-                            'status' => ['type' => 'string'],
-                            'attempt' => ['type' => 'integer'],
+                            'type' => [
+                                'type' => 'string',
+                                'enum' => ['queued', 'processing', 'rate_limited', 'retry', 'failed', 'sent', 'technical_fallback', 'processing_timeout'],
+                                'description' => 'Rodzaj zdarzenia. Lista moze zostac rozszerzona w kolejnych wersjach API.',
+                            ],
+                            'status' => [
+                                'type' => 'string',
+                                'enum' => ['pending', 'processing', 'sent', 'retry', 'failed'],
+                                'description' => 'Status wiadomosci po zdarzeniu.',
+                            ],
+                            'attempt' => ['type' => 'integer', 'minimum' => 0, 'description' => 'Numer proby zwiazanej ze zdarzeniem.'],
                             'errorCode' => ['type' => 'string', 'nullable' => true],
                             'errorMessage' => ['type' => 'string', 'nullable' => true],
                             'providerMessageId' => ['type' => 'string', 'nullable' => true],
-                            'details' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
+                            'details' => [
+                                'type' => 'object',
+                                'nullable' => true,
+                                'additionalProperties' => true,
+                                'description' => 'Dodatkowe dane zalezne od typu zdarzenia, np. `nextAttemptAt` albo zmiana priorytetu.',
+                            ],
                             'createdAt' => ['type' => 'string', 'format' => 'date-time'],
                         ],
                     ],
@@ -496,6 +572,7 @@ HTML;
                             ],
                             'details' => [
                                 'type' => 'string',
+                                'description' => 'Szczegoly dostepne tylko przy wlaczonym APP_DEBUG.',
                             ],
                         ],
                     ],
@@ -534,6 +611,15 @@ HTML;
                             'application/json' => [
                                 'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
                                 'example' => ['error' => 'Email not found'],
+                            ],
+                        ],
+                    ],
+                    'RequestTooLarge' => [
+                        'description' => sprintf('Body requestu przekracza limit %d bajtow dla tego srodowiska.', $maxRequestBodyBytes),
+                        'content' => [
+                            'application/json' => [
+                                'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
+                                'example' => ['error' => 'Request body is too large'],
                             ],
                         ],
                     ],

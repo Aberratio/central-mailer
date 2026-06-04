@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Tests\Email;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Email\EmailBrandConfig;
 use CentralMailer\Email\EmailMessage;
 use CentralMailer\Email\SmtpEmailProvider;
 use PHPUnit\Framework\TestCase;
@@ -50,6 +51,15 @@ final class SmtpEmailProviderTest extends TestCase
             '<71d9e180-b457-4fc8-b5bb-fc35ba5bc481@mailer.example.test>',
             $method->invoke($provider, $message)
         );
+    }
+
+    public function testUsesSenderNameFromBrandConfig(): void
+    {
+        $provider = new SmtpEmailProvider(new Env([]), new EmailBrandConfig(senderName: 'Global sender'));
+
+        $property = new \ReflectionProperty($provider, 'brandConfig');
+
+        self::assertSame('Global sender', $property->getValue($provider)->senderName);
     }
 
     private function messageIdDomain(SmtpEmailProvider $provider): string

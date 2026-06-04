@@ -119,15 +119,6 @@ final class EmailRequestValidator
         return [...$common, 'recipients' => $validatedRecipients];
     }
 
-    /** @param array<string, mixed> $payload */
-    public function validateTestPayload(array $payload): array
-    {
-        return [
-            'to' => $this->email($payload['to'] ?? null),
-            'priority' => $this->priority($payload['priority'] ?? 'normal'),
-        ];
-    }
-
     private function priority(mixed $value): string
     {
         if (!is_string($value) || !in_array($value, ['normal', 'high', 'technical'], true)) {

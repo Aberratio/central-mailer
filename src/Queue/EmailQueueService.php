@@ -74,21 +74,6 @@ final class EmailQueueService
         return $result;
     }
 
-    /** @param array<string, mixed> $payload */
-    public function enqueueTest(string $sourceApp, array $payload, ?string $idempotencyKey = null): EnqueueResult
-    {
-        $validated = $this->validator->validateTestPayload($payload);
-
-        return $this->enqueue($sourceApp, [
-            'to' => $validated['to'],
-            'subject' => 'Test centralnej uslugi mailowej',
-            'html' => '<p>To jest testowa wiadomosc dodana do kolejki centralnej uslugi mailowej.</p>',
-            'text' => 'To jest testowa wiadomosc dodana do kolejki centralnej uslugi mailowej.',
-            'priority' => $validated['priority'],
-            'metadata' => ['type' => 'test'],
-        ], $idempotencyKey);
-    }
-
     private function validateIdempotencyKey(?string $idempotencyKey): ?string
     {
         if ($idempotencyKey === null || $idempotencyKey === '') {

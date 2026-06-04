@@ -152,23 +152,6 @@ final class EmailControllerTest extends DatabaseTestCase
         self::assertSame('technical', $this->fetchQueueRow($payload['id'])['priority']);
     }
 
-    public function testTestEndpointStoresTechnicalPriority(): void
-    {
-        $request = (new ServerRequestFactory())
-            ->createServerRequest('POST', '/emails/test')
-            ->withAttribute('sourceApp', 'app-a')
-            ->withParsedBody([
-                'to' => 'developer@deliverable.test',
-                'priority' => 'technical',
-            ]);
-
-        $response = $this->controller()->test($request);
-        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
-
-        self::assertSame(201, $response->getStatusCode());
-        self::assertSame('technical', $this->fetchQueueRow($payload['id'])['priority']);
-    }
-
     private function controller(): EmailController
     {
         return new EmailController(
