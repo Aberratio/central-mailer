@@ -24,20 +24,25 @@ final class EmailWorker
     {
         $this->releaseStaleProcessing();
 
-        $remaining = $this->rateLimiter->remaining();
-        if ($remaining <= 0) {
-            $this->logger->info('Email rate limit reached', [
-                'limit' => $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100),
-                'windowMinutes' => $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15),
-            ]);
-
-            return;
-        }
-
-        $batchSize = min($this->env->int('EMAIL_WORKER_BATCH_SIZE', 20), $remaining);
+        $batchSize = $this->env->int('EMAIL_WORKER_BATCH_SIZE', 20);
+        $leaseSeconds = $this->processingTimeoutSeconds();
         for ($i = 0; $i < $batchSize; $i++) {
-            $emails = $this->repository->claimBatch(1);
+            $emails = $this->repository->claimBatch(1, $leaseSeconds);
             if ($emails === []) {
+                return;
+            }
+
+            if (!$this->rateLimiter->acquire()) {
+                $this->repository->releaseClaim(
+                    (string) $emails[0]['id'],
+                    (string) $emails[0]['lease_id'],
+                    (string) $emails[0]['_previous_status']
+                );
+                $this->logger->info('Email rate limit reached', [
+                    'limit' => $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100),
+                    'windowMinutes' => $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15),
+                ]);
+
                 return;
             }
 
@@ -64,7 +69,17 @@ final class EmailWorker
                 $row['text_body']
             ));
 
-            $this->repository->markSent($row['id'], $result->providerMessageId);
+            $marked = $this->repository->markSent($row['id'], $row['lease_id'], $result->providerMessageId);
+            if (!$marked) {
+                $this->logger->critical('Email was accepted by provider after its processing lease was lost', [
+                    'id' => $row['id'],
+                    'sourceApp' => $row['source_app'],
+                    'providerMessageId' => $result->providerMessageId,
+                ]);
+
+                return;
+            }
+
             $this->logger->info('Email sent', [
                 'id' => $row['id'],
                 'sourceApp' => $row['source_app'],
@@ -77,11 +92,22 @@ final class EmailWorker
             $nextAttemptAt = $attempts < $maxAttempts ? $this->nextAttemptAt($attempts) : null;
             $finalStatus = $this->repository->markFailedOrRetry(
                 $row['id'],
+                $row['lease_id'],
                 $attempts,
                 $maxAttempts,
                 $exception->getMessage(),
                 $nextAttemptAt
             );
+
+            if ($finalStatus === null) {
+                $this->logger->warning('Email send failed after its processing lease was lost', [
+                    'id' => $row['id'],
+                    'sourceApp' => $row['source_app'],
+                    'error' => $exception->getMessage(),
+                ]);
+
+                return;
+            }
 
             $this->logger->warning('Email send failed', [
                 'id' => $row['id'],
@@ -104,10 +130,10 @@ final class EmailWorker
 
     private function releaseStaleProcessing(): void
     {
-        $timeoutSeconds = $this->env->int('EMAIL_PROCESSING_TIMEOUT_SECONDS', 300);
-        $olderThan = (new \DateTimeImmutable(sprintf('-%d seconds', $timeoutSeconds)))->format('Y-m-d H:i:s');
+        $timeoutSeconds = $this->processingTimeoutSeconds();
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
         $released = $this->repository->releaseStaleProcessing(
-            $olderThan,
+            $now,
             sprintf('Email processing timed out after %d seconds', $timeoutSeconds)
         );
 
@@ -117,5 +143,14 @@ final class EmailWorker
                 'timeoutSeconds' => $timeoutSeconds,
             ]);
         }
+    }
+
+    private function processingTimeoutSeconds(): int
+    {
+        return max(
+            1,
+            $this->env->int('EMAIL_PROCESSING_TIMEOUT_SECONDS', 300),
+            $this->env->int('SMTP_TIMEOUT_SECONDS', 30) + 30
+        );
     }
 }

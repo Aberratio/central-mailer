@@ -86,6 +86,9 @@ HTML;
                         'summary' => 'Dodaje e-mail do kolejki',
                         'operationId' => 'createEmail',
                         'security' => [['ApiKeyAuth' => []]],
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/IdempotencyKey'],
+                        ],
                         'requestBody' => [
                             'required' => true,
                             'content' => [
@@ -103,6 +106,14 @@ HTML;
                             ],
                         ],
                         'responses' => [
+                            '200' => [
+                                'description' => 'Powtorzone zadanie z tym samym Idempotency-Key. Zwraca istniejaca wiadomosc.',
+                                'content' => [
+                                    'application/json' => [
+                                        'schema' => ['$ref' => '#/components/schemas/EmailQueuedResponse'],
+                                    ],
+                                ],
+                            ],
                             '201' => [
                                 'description' => 'Wiadomosc zostala dodana do kolejki.',
                                 'content' => [
@@ -113,6 +124,7 @@ HTML;
                             ],
                             '400' => ['$ref' => '#/components/responses/ValidationError'],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
                     ],
@@ -123,6 +135,9 @@ HTML;
                         'summary' => 'Dodaje testowy e-mail do kolejki',
                         'operationId' => 'createTestEmail',
                         'security' => [['ApiKeyAuth' => []]],
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/IdempotencyKey'],
+                        ],
                         'requestBody' => [
                             'required' => true,
                             'content' => [
@@ -133,6 +148,14 @@ HTML;
                             ],
                         ],
                         'responses' => [
+                            '200' => [
+                                'description' => 'Powtorzone zadanie z tym samym Idempotency-Key. Zwraca istniejaca wiadomosc.',
+                                'content' => [
+                                    'application/json' => [
+                                        'schema' => ['$ref' => '#/components/schemas/EmailQueuedResponse'],
+                                    ],
+                                ],
+                            ],
                             '201' => [
                                 'description' => 'Testowa wiadomosc zostala dodana do kolejki.',
                                 'content' => [
@@ -143,6 +166,7 @@ HTML;
                             ],
                             '400' => ['$ref' => '#/components/responses/ValidationError'],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
                     ],
@@ -182,6 +206,19 @@ HTML;
                 ],
             ],
             'components' => [
+                'parameters' => [
+                    'IdempotencyKey' => [
+                        'name' => 'Idempotency-Key',
+                        'in' => 'header',
+                        'required' => false,
+                        'description' => 'Unikalny klucz zadania w obrebie aplikacji. Powtorzenie identycznego zadania zwraca ten sam e-mail.',
+                        'schema' => [
+                            'type' => 'string',
+                            'maxLength' => 255,
+                            'example' => 'order-confirmation-12345',
+                        ],
+                    ],
+                ],
                 'securitySchemes' => [
                     'ApiKeyAuth' => [
                         'type' => 'apiKey',
@@ -249,7 +286,7 @@ HTML;
                             ],
                             'status' => [
                                 'type' => 'string',
-                                'enum' => ['pending'],
+                                'enum' => ['pending', 'processing', 'sent', 'retry', 'failed'],
                             ],
                         ],
                     ],
@@ -324,6 +361,15 @@ HTML;
                             'application/json' => [
                                 'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
                                 'example' => ['error' => 'Invalid or missing API key'],
+                            ],
+                        ],
+                    ],
+                    'IdempotencyConflict' => [
+                        'description' => 'Idempotency-Key zostal juz uzyty dla innej wiadomosci.',
+                        'content' => [
+                            'application/json' => [
+                                'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
+                                'example' => ['error' => 'Idempotency-Key was already used for a different email'],
                             ],
                         ],
                     ],

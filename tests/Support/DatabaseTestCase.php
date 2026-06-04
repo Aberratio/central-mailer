@@ -29,6 +29,8 @@ abstract class DatabaseTestCase extends TestCase
         $row = [
             'id' => $id,
             'source_app' => 'app-a',
+            'idempotency_key' => null,
+            'request_hash' => null,
             'recipient_email' => 'recipient@deliverable.test',
             'subject' => 'Subject',
             'html_body' => '<p>Body</p>',
@@ -36,6 +38,8 @@ abstract class DatabaseTestCase extends TestCase
             'priority' => 'normal',
             'metadata' => null,
             'status' => 'pending',
+            'lease_id' => null,
+            'lease_expires_at' => null,
             'attempts' => 0,
             'max_attempts' => 5,
             'next_attempt_at' => null,
@@ -49,11 +53,11 @@ abstract class DatabaseTestCase extends TestCase
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
-             (id, source_app, recipient_email, subject, html_body, text_body, priority, metadata, status,
-              attempts, max_attempts, next_attempt_at, last_error, provider_message_id, created_at, updated_at, sent_at)
+             (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, metadata, status,
+              lease_id, lease_expires_at, attempts, max_attempts, next_attempt_at, last_error, provider_message_id, created_at, updated_at, sent_at)
              VALUES
-             (:id, :source_app, :recipient_email, :subject, :html_body, :text_body, :priority, :metadata, :status,
-              :attempts, :max_attempts, :next_attempt_at, :last_error, :provider_message_id, :created_at, :updated_at, :sent_at)'
+             (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :metadata, :status,
+              :lease_id, :lease_expires_at, :attempts, :max_attempts, :next_attempt_at, :last_error, :provider_message_id, :created_at, :updated_at, :sent_at)'
         );
         $stmt->execute($row);
 
@@ -75,6 +79,8 @@ abstract class DatabaseTestCase extends TestCase
             'CREATE TABLE email_queue (
                 id TEXT PRIMARY KEY,
                 source_app TEXT NOT NULL,
+                idempotency_key TEXT NULL,
+                request_hash TEXT NULL,
                 recipient_email TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 html_body TEXT NOT NULL,
@@ -82,6 +88,8 @@ abstract class DatabaseTestCase extends TestCase
                 priority TEXT NOT NULL,
                 metadata TEXT NULL,
                 status TEXT NOT NULL,
+                lease_id TEXT NULL,
+                lease_expires_at TEXT NULL,
                 attempts INTEGER NOT NULL,
                 max_attempts INTEGER NOT NULL,
                 next_attempt_at TEXT NULL,
@@ -89,7 +97,21 @@ abstract class DatabaseTestCase extends TestCase
                 provider_message_id TEXT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                sent_at TEXT NULL
+                sent_at TEXT NULL,
+                UNIQUE (source_app, idempotency_key)
+            )'
+        );
+        $this->pdo->exec(
+            'CREATE TABLE email_rate_limit_lock (
+                id INTEGER PRIMARY KEY,
+                updated_at TEXT NOT NULL
+            )'
+        );
+        $this->pdo->exec("INSERT INTO email_rate_limit_lock (id, updated_at) VALUES (1, '2026-01-01 00:00:00')");
+        $this->pdo->exec(
+            'CREATE TABLE email_rate_limit_reservations (
+                id TEXT PRIMARY KEY,
+                reserved_at TEXT NOT NULL
             )'
         );
     }

@@ -41,4 +41,35 @@ final class EmailControllerTest extends DatabaseTestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('<message-id@mailer.test>', $payload['providerMessageId']);
     }
+
+    public function testCreateReplaysRequestWithSameIdempotencyKey(): void
+    {
+        $logger = new NullLogger();
+        $controller = new EmailController(
+            new EmailQueueService(
+                $this->repository,
+                new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false'])),
+                $logger
+            ),
+            $this->repository
+        );
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/emails')
+            ->withAttribute('sourceApp', 'app-a')
+            ->withHeader('Idempotency-Key', 'request-123')
+            ->withParsedBody([
+                'to' => 'recipient@deliverable.test',
+                'subject' => 'Subject',
+                'html' => '<p>Body</p>',
+            ]);
+
+        $created = $controller->create($request);
+        $replayed = $controller->create($request);
+        $createdPayload = json_decode((string) $created->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $replayedPayload = json_decode((string) $replayed->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(201, $created->getStatusCode());
+        self::assertSame(200, $replayed->getStatusCode());
+        self::assertSame($createdPayload['id'], $replayedPayload['id']);
+    }
 }

@@ -16,10 +16,12 @@ final class SmtpEmailProvider implements EmailProviderInterface
     public function send(EmailMessage $message): EmailSendResult
     {
         $mail = new PHPMailer(true);
-        $mail->SMTPDebug = 2;
-        $mail->Debugoutput = static function ($str, $level): void {
-            error_log("SMTP DEBUG [$level]: $str");
-        };
+        $mail->SMTPDebug = $this->env->int('SMTP_DEBUG_LEVEL', 0);
+        if ($mail->SMTPDebug > 0) {
+            $mail->Debugoutput = static function ($str, $level): void {
+                error_log("SMTP DEBUG [$level]: $str");
+            };
+        }
         $mail->isSMTP();
         $mail->Host = $this->env->string('SMTP_HOST');
         $mail->Port = $this->env->int('SMTP_PORT', 587);
@@ -29,6 +31,7 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $mail->Timeout = $this->env->int('SMTP_TIMEOUT_SECONDS', 30);
         $mail->Hostname = $this->messageIdDomain();
         $mail->Helo = $mail->Hostname;
+        $mail->MessageID = $this->messageId($message);
 
         $secure = strtolower($this->env->string('SMTP_SECURE', 'tls'));
         if ($secure === 'ssl') {
@@ -63,5 +66,10 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $domain = substr(strrchr($fromEmail, '@') ?: '', 1);
 
         return $domain !== '' ? $domain : 'localhost.localdomain';
+    }
+
+    private function messageId(EmailMessage $message): string
+    {
+        return sprintf('<%s@%s>', $message->id, $this->messageIdDomain());
     }
 }
