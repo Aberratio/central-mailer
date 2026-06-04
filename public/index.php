@@ -28,9 +28,14 @@ use Dotenv\Dotenv;
 use Psr\Log\LoggerInterface;
 use Slim\Factory\AppFactory;
 
-require __DIR__ . '/../vendor/autoload.php';
-
 $root = dirname(__DIR__);
+$activeRoot = $root . '/current';
+if (is_file($activeRoot . '/vendor/autoload.php')) {
+    $root = $activeRoot;
+}
+
+require $root . '/vendor/autoload.php';
+
 if (file_exists($root . '/.env')) {
     Dotenv::createImmutable($root)->safeLoad();
 }
