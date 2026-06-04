@@ -56,6 +56,7 @@ GMAIL_SMTP_PORT=587
 GMAIL_SMTP_SECURE=tls
 GMAIL_FROM_EMAIL=developer@gmail.com
 GMAIL_FROM_NAME="Developer notifications"
+TECHNICAL_EMAIL_FALLBACK_TO_STANDARD=true
 
 EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
@@ -303,7 +304,9 @@ The worker fetches a batch limited by `EMAIL_WORKER_BATCH_SIZE` and the rate lim
 
 Normal messages older than `EMAIL_PRIORITY_AGING_SECONDS` receive effective high priority, so a constant stream of high-priority messages cannot starve them.
 
-The technical worker ignores client weights and priority aging. It sends only the oldest non-terminal `technical` message. A retry scheduled for that oldest message blocks later technical messages until it is sent or permanently failed.
+The technical worker ignores client weights and priority aging. It sends only the oldest non-terminal `technical` message. A retry scheduled for that oldest message blocks later technical messages until it is sent, permanently failed, or moved to the standard queue.
+
+When `TECHNICAL_EMAIL_FALLBACK_TO_STANDARD=true`, a technical message that exhausts its Gmail SMTP attempts changes from `technical` to `normal`, returns to `pending`, and receives a fresh attempt budget in the standard SMTP queue. The event history records `technical_fallback` and preserves the Gmail SMTP error in `lastError`. This fallback requires a running technical worker; it cannot detect that the technical worker process itself is stopped.
 
 For MySQL/MariaDB versions that support `SELECT ... FOR UPDATE SKIP LOCKED`, the worker uses that mechanism. If the database does not support it, the fallback uses transactional `FOR UPDATE`, which is safe but can block parallel workers. Each claimed message receives a processing lease, so a delayed worker cannot overwrite a status written by a newer worker.
 

@@ -118,6 +118,34 @@ final class EmailWorker
         } catch (\Throwable $exception) {
             $attempts = ((int) $row['attempts']) + 1;
             $maxAttempts = (int) $row['max_attempts'];
+            if ($this->shouldFallbackTechnicalToStandard($attempts, $maxAttempts)) {
+                $fallback = $this->repository->fallbackTechnicalToStandard(
+                    $row['id'],
+                    $row['lease_id'],
+                    $attempts,
+                    $exception->getMessage(),
+                    $exception::class
+                );
+                if (!$fallback) {
+                    $this->logger->warning('Technical email fallback failed after its processing lease was lost', [
+                        'id' => $row['id'],
+                        'sourceApp' => $row['source_app'],
+                        'error' => $exception->getMessage(),
+                    ]);
+
+                    return;
+                }
+
+                $this->logger->warning('Technical email moved to standard queue after send failures', [
+                    'id' => $row['id'],
+                    'sourceApp' => $row['source_app'],
+                    'attempts' => $attempts,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                return;
+            }
+
             $nextAttemptAt = $attempts < $maxAttempts ? $this->nextAttemptAt($attempts) : null;
             $finalStatus = $this->repository->markFailedOrRetry(
                 $row['id'],
@@ -152,6 +180,13 @@ final class EmailWorker
                 'error' => $exception->getMessage(),
             ]);
         }
+    }
+
+    private function shouldFallbackTechnicalToStandard(int $attempts, int $maxAttempts): bool
+    {
+        return $this->queue === 'technical'
+            && $this->env->bool('TECHNICAL_EMAIL_FALLBACK_TO_STANDARD', true)
+            && $attempts >= $maxAttempts;
     }
 
     private function nextAttemptAt(int $attempts): string

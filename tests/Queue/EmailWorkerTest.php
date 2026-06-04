@@ -227,6 +227,69 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame('pending', $this->fetchQueueRow($secondTechnicalId)['status']);
     }
 
+    public function testTechnicalWorkerFallsBackToStandardQueueAfterFinalFailure(): void
+    {
+        $technicalId = $this->insertQueueRow([
+            'id' => 'technical-fallback',
+            'priority' => 'technical',
+            'max_attempts' => 1,
+        ]);
+        $failingProvider = new class implements EmailProviderInterface {
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                throw new \RuntimeException('Gmail SMTP is unavailable');
+            }
+        };
+
+        $this->worker($failingProvider, 'technical')->runOnce();
+
+        $fallbackRow = $this->fetchQueueRow($technicalId);
+        self::assertSame('normal', $fallbackRow['priority']);
+        self::assertSame('pending', $fallbackRow['status']);
+        self::assertSame(0, $fallbackRow['attempts']);
+        self::assertSame('Gmail SMTP is unavailable', $fallbackRow['last_error']);
+        self::assertSame(1, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '$technicalId' AND event_type = 'technical_fallback'"
+        )->fetchColumn());
+
+        $standardProvider = new class implements EmailProviderInterface {
+            /** @var list<string> */
+            public array $sentIds = [];
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sentIds[] = $message->id;
+
+                return new EmailSendResult('<standard@mailer.test>');
+            }
+        };
+        $this->worker($standardProvider)->runOnce();
+
+        self::assertSame([$technicalId], $standardProvider->sentIds);
+        self::assertSame('sent', $this->fetchQueueRow($technicalId)['status']);
+    }
+
+    public function testTechnicalWorkerCanDisableFallbackToStandardQueue(): void
+    {
+        $technicalId = $this->insertQueueRow([
+            'id' => 'technical-no-fallback',
+            'priority' => 'technical',
+            'max_attempts' => 1,
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                throw new \RuntimeException('Gmail SMTP is unavailable');
+            }
+        };
+
+        $this->worker($provider, 'technical', ['TECHNICAL_EMAIL_FALLBACK_TO_STANDARD' => 'false'])->runOnce();
+
+        $row = $this->fetchQueueRow($technicalId);
+        self::assertSame('technical', $row['priority']);
+        self::assertSame('failed', $row['status']);
+    }
+
     /**
      * @param array<string, string> $envValues
      */
