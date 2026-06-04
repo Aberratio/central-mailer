@@ -45,8 +45,8 @@ final class EmailRequestValidator
             throw new \InvalidArgumentException('Text body is too large');
         }
 
-        if (!in_array($priority, ['normal', 'high'], true)) {
-            throw new \InvalidArgumentException('Priority must be normal or high');
+        if (!in_array($priority, ['normal', 'high', 'technical'], true)) {
+            throw new \InvalidArgumentException('Priority must be normal, high or technical');
         }
 
         if ($metadata !== null && !is_array($metadata)) {

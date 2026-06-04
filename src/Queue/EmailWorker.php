@@ -19,8 +19,12 @@ final class EmailWorker
         private readonly RateLimiter $rateLimiter,
         private readonly LoggerInterface $logger,
         private readonly Env $env,
-        private readonly AttachmentStorage $attachmentStorage
+        private readonly AttachmentStorage $attachmentStorage,
+        private readonly string $queue = 'standard'
     ) {
+        if (!in_array($this->queue, ['standard', 'technical'], true)) {
+            throw new \InvalidArgumentException('Queue must be standard or technical');
+        }
     }
 
     public function runOnce(): void
@@ -32,7 +36,7 @@ final class EmailWorker
         $leaseSeconds = $this->processingTimeoutSeconds();
         $priorityAgingSeconds = $this->env->int('EMAIL_PRIORITY_AGING_SECONDS', 900);
         for ($i = 0; $i < $batchSize; $i++) {
-            $emails = $this->repository->claimBatch(1, $leaseSeconds, $priorityAgingSeconds);
+            $emails = $this->repository->claimBatch(1, $leaseSeconds, $priorityAgingSeconds, $this->queue);
             if ($emails === []) {
                 return;
             }
@@ -67,6 +71,7 @@ final class EmailWorker
             'sourceApp' => $row['source_app'],
             'recipient' => $row['recipient_email'],
             'attempts' => (int) $row['attempts'],
+            'queue' => $this->queue,
         ]);
 
         try {
@@ -178,7 +183,9 @@ final class EmailWorker
         return max(
             1,
             $this->env->int('EMAIL_PROCESSING_TIMEOUT_SECONDS', 300),
-            $this->env->int('SMTP_TIMEOUT_SECONDS', 30) + 30
+            $this->queue === 'technical'
+                ? $this->env->int('GMAIL_SMTP_TIMEOUT_SECONDS', 30) + 30
+                : $this->env->int('SMTP_TIMEOUT_SECONDS', 30) + 30
         );
     }
 

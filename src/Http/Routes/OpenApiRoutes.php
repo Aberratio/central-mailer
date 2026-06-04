@@ -316,8 +316,9 @@ HTML;
                             ],
                             'priority' => [
                                 'type' => 'string',
-                                'enum' => ['normal', 'high'],
+                                'enum' => ['normal', 'high', 'technical'],
                                 'default' => 'normal',
+                                'description' => 'technical trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
                             ],
                             'metadata' => [
                                 'type' => 'object',
@@ -346,7 +347,12 @@ HTML;
                             'subject' => ['type' => 'string', 'maxLength' => 255],
                             'html' => ['type' => 'string', 'maxLength' => 1000000],
                             'text' => ['type' => 'string', 'nullable' => true, 'maxLength' => 1000000],
-                            'priority' => ['type' => 'string', 'enum' => ['normal', 'high'], 'default' => 'normal'],
+                            'priority' => [
+                                'type' => 'string',
+                                'enum' => ['normal', 'high', 'technical'],
+                                'default' => 'normal',
+                                'description' => 'technical trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
+                            ],
                             'metadata' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
                             'recipients' => [
                                 'type' => 'array',

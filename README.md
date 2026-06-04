@@ -1,6 +1,6 @@
-# Central Mailer SMTP
+# Central Mailer
 
-A lightweight PHP backend service for centralized, queued email sending from multiple applications. The API stores messages in MySQL/MariaDB, while a separate CLI worker sends them through SMTP with retries, fair scheduling, rate limits, attachments, and status history.
+A lightweight PHP backend service for centralized, queued email sending from multiple applications. The API stores messages in MySQL/MariaDB. Standard messages use the primary SMTP account, while `technical` messages use a separate FIFO queue and Gmail SMTP account.
 
 Stack: PHP 8.2+, Slim Framework, MySQL/MariaDB, PHPMailer, vlucas/phpdotenv, Monolog.
 
@@ -10,6 +10,7 @@ Stack: PHP 8.2+, Slim Framework, MySQL/MariaDB, PHPMailer, vlucas/phpdotenv, Mon
 - Composer
 - MySQL 8.0+ or MariaDB 10.6+
 - SMTP access, for example CyberFolks/SeoHost
+- A Gmail account with 2-Step Verification and an App Password for technical messages
 - PHP extensions: `pdo`, `pdo_mysql`, `json`, `mbstring`, `fileinfo`
 
 ## Installation
@@ -48,6 +49,13 @@ SMTP_PASSWORD=secret
 SMTP_FROM_EMAIL=kontakt@example.com
 SMTP_FROM_NAME="My application"
 SMTP_DEBUG_LEVEL=0
+
+GMAIL_SMTP_USER=developer@gmail.com
+GMAIL_SMTP_APP_PASSWORD=google-app-password
+GMAIL_SMTP_PORT=587
+GMAIL_SMTP_SECURE=tls
+GMAIL_FROM_EMAIL=developer@gmail.com
+GMAIL_FROM_NAME="Developer notifications"
 
 EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
@@ -97,6 +105,12 @@ Then run the clients, batch, attachments, and event history migration:
 
 ```bash
 mysql -u root -p central_mailer < database/migrations/003_add_clients_batches_attachments_events.sql
+```
+
+Then enable the technical priority:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/004_add_technical_priority.sql
 ```
 
 The deploy workflow uses the migration runner instead of invoking SQL files manually:
@@ -149,6 +163,20 @@ php bin/worker.php
 
 The worker runs in a loop and sleeps for `EMAIL_WORKER_SLEEP_SECONDS` seconds between cycles.
 
+Technical Gmail SMTP worker:
+
+```bash
+composer technical-worker
+```
+
+or:
+
+```bash
+php bin/technical-worker.php
+```
+
+Run exactly one technical worker to preserve strict FIFO ordering.
+
 ## Endpoints
 
 Swagger UI documentation is available after starting the API at:
@@ -194,6 +222,8 @@ Response:
 `Idempotency-Key` is optional but strongly recommended. It must be unique within the calling application. Repeating the same request with the same key returns the existing message with HTTP `200`. Reusing the key for different content returns HTTP `409`.
 
 The SMTP `Message-ID` is derived from the queue ID and stays stable across retries. This reduces duplicate-delivery risk after an uncertain SMTP result, but SMTP cannot provide a strict exactly-once delivery guarantee.
+
+Set `"priority": "technical"` to route a message to the separate Gmail SMTP FIFO queue. `normal` and `high` messages are never claimed by the technical worker, and the standard SMTP worker never claims `technical` messages.
 
 ### Add an attachment
 
@@ -242,7 +272,7 @@ curl -X GET http://localhost:8080/emails/{id} \
 
 An application can read only its own messages. The `app-a` API key will not see emails added by `app-b`.
 
-Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and SMTP acceptance.
+Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and provider acceptance.
 
 ### Add a test email
 
@@ -259,7 +289,7 @@ The test endpoint adds the message to the normal queue. It does not send it dire
 
 - `pending` - the message is waiting in the queue.
 - `processing` - the worker locked the record and is trying to send the message.
-- `sent` - the sender SMTP server accepted the message. Final mailbox delivery can still fail later on the recipient side.
+- `sent` - the configured SMTP server accepted the message. Final mailbox delivery can still fail later on the recipient side.
 - `retry` - sending failed, but it will be retried after `next_attempt_at`.
 - `failed` - `max_attempts` was exceeded.
 
@@ -273,9 +303,17 @@ The worker fetches a batch limited by `EMAIL_WORKER_BATCH_SIZE` and the rate lim
 
 Normal messages older than `EMAIL_PRIORITY_AGING_SECONDS` receive effective high priority, so a constant stream of high-priority messages cannot starve them.
 
+The technical worker ignores client weights and priority aging. It sends only the oldest non-terminal `technical` message. A retry scheduled for that oldest message blocks later technical messages until it is sent or permanently failed.
+
 For MySQL/MariaDB versions that support `SELECT ... FOR UPDATE SKIP LOCKED`, the worker uses that mechanism. If the database does not support it, the fallback uses transactional `FOR UPDATE`, which is safe but can block parallel workers. Each claimed message receives a processing lease, so a delayed worker cannot overwrite a status written by a newer worker.
 
 Retry uses exponential backoff: 60s, 120s, 240s, 480s, up to a maximum of 3600s.
+
+## Gmail SMTP authorization and delivery feedback
+
+The technical worker uses `smtp.gmail.com` with the full Gmail address in `GMAIL_SMTP_USER` and a Google App Password in `GMAIL_SMTP_APP_PASSWORD`. Do not use the normal Google account password. App Passwords require 2-Step Verification and might be unavailable for some work, school, Advanced Protection, or security-key-only accounts. OAuth 2.0 is not required for this App Password SMTP variant.
+
+A successful SMTP send marks the queue record as `sent` and stores the stable MIME `Message-ID` as `providerMessageId`. This confirms that Gmail accepted the message for sending, not that the recipient mailbox delivered or opened it. Later rejections may arrive as bounce messages in the sender mailbox and require a separate mailbox monitoring feature. Google Workspace administrators can investigate delivery in Email Log Search, but that is an administrative troubleshooting tool and is not integrated into this API.
 
 ## Rate limit
 
@@ -296,6 +334,7 @@ Logs are written to:
 
 - `storage/logs/app.log`
 - `storage/logs/worker.log`
+- `storage/logs/technical-worker.log`
 
 Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, and rate limiting. Persistent event history is stored in `email_events`. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
 
@@ -324,13 +363,19 @@ SMTP_SECURE=ssl
 
 ## Cron and systemd
 
-The simplest cron variant starts the worker periodically. Because the current worker is a long-running process, it is best to use `timeout` in cron:
+The simplest cron variant starts the worker periodically. Because the current worker is a long-running
+process, use `timeout` to stop it before the next minute and `flock` to prevent overlapping workers:
 
 ```cron
-* * * * * cd /path/to/central-mailer-smtp && timeout 55 php bin/worker.php >> storage/logs/cron.log 2>&1
+* * * * * cd /path/to/central-mailer-smtp && flock -n storage/worker.lock timeout 55 /usr/bin/php bin/worker.php >> storage/logs/cron.log 2>&1
+* * * * * cd /path/to/central-mailer-smtp && flock -n storage/technical-worker.lock timeout 55 /usr/bin/php bin/technical-worker.php >> storage/logs/technical-cron.log 2>&1
 ```
 
-A better production variant is systemd:
+On shared hosting, replace `/usr/bin/php` with the PHP CLI path provided by the host, for example
+`/usr/local/php83/bin/php`. After a deploy, the next cron execution automatically uses the new application
+files, so the deploy workflow does not need to restart the worker.
+
+On a server with systemd access, a better production variant is:
 
 ```ini
 [Unit]
@@ -358,6 +403,8 @@ sudo systemctl enable central-mailer-worker
 sudo systemctl start central-mailer-worker
 ```
 
+Create a second service with `ExecStart=/usr/bin/php bin/technical-worker.php` and a distinct unit name such as `central-mailer-technical-worker`.
+
 ## GitHub Actions deployment
 
 The workflow in `.github/workflows/deploy.yml` deploys the API to the `staging` or `production` GitHub
@@ -384,8 +431,8 @@ or `APP_ENV=production` in each target `.env` to match its GitHub environment.
 
 The web server document root should be `public_html`. The workflow synchronizes it from `public`, removing
 old frontend files while preserving `.well-known` for certificate validation. Application code, `.env`,
-logs, attachments, and database backups stay outside the public web directory. Configure the worker
-separately through cron or systemd after deployment.
+logs, attachments, and database backups stay outside the public web directory. Create and enable both
+worker processes separately before the first deployment.
 
 ## Security
 

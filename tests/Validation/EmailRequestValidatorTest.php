@@ -80,4 +80,18 @@ final class EmailRequestValidatorTest extends TestCase
         self::assertSame(['to' => 'recipient@deliverable.test'], $result);
         self::assertSame(1, DnsStub::$addressLookupCount);
     }
+
+    public function testAcceptsTechnicalPriority(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateQueuePayload([
+            'to' => 'developer@internal.test',
+            'subject' => 'Technical alert',
+            'html' => '<p>Alert</p>',
+            'priority' => 'technical',
+        ]);
+
+        self::assertSame('technical', $result['priority']);
+    }
 }
