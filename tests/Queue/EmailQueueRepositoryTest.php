@@ -114,6 +114,34 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
         self::assertNull($row['provider_message_id']);
     }
 
+    public function testTechnicalFallbackRequiresCurrentLeaseAndTechnicalPriority(): void
+    {
+        $id = $this->insertQueueRow([
+            'priority' => 'technical',
+            'status' => 'processing',
+            'lease_id' => 'current-lease',
+        ]);
+
+        self::assertFalse($this->repository->fallbackTechnicalToStandard(
+            $id,
+            'old-lease',
+            5,
+            'Old worker error'
+        ));
+        self::assertTrue($this->repository->fallbackTechnicalToStandard(
+            $id,
+            'current-lease',
+            5,
+            'Gmail SMTP is unavailable',
+            \RuntimeException::class
+        ));
+
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('normal', $row['priority']);
+        self::assertSame('pending', $row['status']);
+        self::assertSame(0, $row['attempts']);
+    }
+
     public function testInsertReplaysSameIdempotencyKeyAndRejectsDifferentPayload(): void
     {
         $data = $this->queueData();

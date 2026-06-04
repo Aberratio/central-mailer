@@ -367,6 +367,49 @@ final class EmailQueueRepository
         }
     }
 
+    public function fallbackTechnicalToStandard(
+        string $id,
+        string $leaseId,
+        int $attempts,
+        string $error,
+        ?string $errorCode = null
+    ): bool {
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'UPDATE email_queue
+                 SET priority = "normal", status = "pending", attempts = 0, next_attempt_at = NULL, last_error = :last_error,
+                     updated_at = :updated_at, lease_id = NULL, lease_expires_at = NULL
+                 WHERE id = :id AND priority = "technical" AND status = "processing" AND lease_id = :lease_id'
+            );
+            $stmt->execute([
+                'id' => $id,
+                'lease_id' => $leaseId,
+                'last_error' => mb_substr($error, 0, 2000),
+                'updated_at' => self::now(),
+            ]);
+            $marked = $stmt->rowCount() === 1;
+            if ($marked) {
+                $this->insertEvent(
+                    $id,
+                    'technical_fallback',
+                    'pending',
+                    $attempts,
+                    $errorCode,
+                    $error,
+                    null,
+                    ['fromPriority' => 'technical', 'toPriority' => 'normal']
+                );
+            }
+            $this->pdo->commit();
+
+            return $marked;
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
+    }
+
     public function releaseStaleProcessing(string $olderThan, string $error): int
     {
         $lockClause = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' ? '' : ' FOR UPDATE';
