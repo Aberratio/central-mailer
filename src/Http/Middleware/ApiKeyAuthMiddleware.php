@@ -21,7 +21,7 @@ final class ApiKeyAuthMiddleware implements MiddlewareInterface
     {
         $path = $request->getUri()->getPath();
 
-        if ($request->getMethod() === 'OPTIONS' || in_array($path, ['/docs', '/openapi.json'], true)) {
+        if ($request->getMethod() === 'OPTIONS' || in_array($path, ['/docs', '/openapi.json', '/health'], true)) {
             return $handler->handle($request);
         }
 
