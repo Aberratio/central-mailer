@@ -164,6 +164,58 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
         self::assertSame($appAId, $second[0]['id']);
     }
 
+    public function testStandardQueueDoesNotClaimTechnicalEmail(): void
+    {
+        $technicalId = $this->insertQueueRow(['priority' => 'technical']);
+        $standardId = $this->insertQueueRow([
+            'priority' => 'normal',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+
+        $claimed = $this->repository->claimBatch(1, 300, 900);
+
+        self::assertSame($standardId, $claimed[0]['id']);
+        self::assertSame('pending', $this->fetchQueueRow($technicalId)['status']);
+    }
+
+    public function testTechnicalQueueClaimsOldestEmailInFifoOrder(): void
+    {
+        $oldestId = $this->insertQueueRow([
+            'id' => 'technical-a',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'technical-b',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+        $this->insertQueueRow(['priority' => 'high']);
+
+        $claimed = $this->repository->claimBatch(20, 300, 900, 'technical');
+
+        self::assertCount(1, $claimed);
+        self::assertSame($oldestId, $claimed[0]['id']);
+    }
+
+    public function testTechnicalQueueWaitsForOldestRetryBeforeClaimingNextEmail(): void
+    {
+        $this->insertQueueRow([
+            'id' => 'technical-retry',
+            'priority' => 'technical',
+            'status' => 'retry',
+            'next_attempt_at' => '2099-01-01 00:00:00',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'technical-next',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+
+        self::assertSame([], $this->repository->claimBatch(1, 300, 900, 'technical'));
+    }
+
     public function testBatchStoresSharedMessageAndCreatesQueueEvents(): void
     {
         $result = $this->repository->insertBatch([

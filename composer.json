@@ -30,6 +30,7 @@
   "scripts": {
     "serve": "php -S 0.0.0.0:8080 -t public public/router.php",
     "worker": "php bin/worker.php",
+    "technical-worker": "php bin/technical-worker.php",
     "test": "phpunit"
   },
   "require-dev": {

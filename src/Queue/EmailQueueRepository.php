@@ -187,32 +187,48 @@ final class EmailQueueRepository
     }
 
     /** @return list<array<string, mixed>> */
-    public function claimBatch(int $limit, int $leaseSeconds, int $priorityAgingSeconds): array
+    public function claimBatch(int $limit, int $leaseSeconds, int $priorityAgingSeconds, string $queue = 'standard'): array
     {
+        if (!in_array($queue, ['standard', 'technical'], true)) {
+            throw new \InvalidArgumentException('Queue must be standard or technical');
+        }
+
         $leaseId = Uuid::v4();
         $leaseExpiresAt = (new \DateTimeImmutable(sprintf('+%d seconds', $leaseSeconds)))->format('Y-m-d H:i:s');
         $agingCutoff = (new \DateTimeImmutable(sprintf('-%d seconds', max(0, $priorityAgingSeconds))))->format('Y-m-d H:i:s');
         $this->pdo->beginTransaction();
 
         try {
-            $this->addQueueCredits();
-            $claimed = $this->claimWithSkipLocked($limit, $agingCutoff);
+            if ($queue === 'standard') {
+                $this->addQueueCredits();
+            }
+            $claimed = $queue === 'technical'
+                ? $this->claimTechnicalWithSkipLocked()
+                : $this->claimWithSkipLocked($limit, $agingCutoff);
             $ids = array_column($claimed, 'id');
             if ($ids !== []) {
                 $this->setProcessing($ids, $leaseId, $leaseExpiresAt);
-                $this->spendQueueCredits($claimed);
+                if ($queue === 'standard') {
+                    $this->spendQueueCredits($claimed);
+                }
             }
             $this->pdo->commit();
         } catch (\Throwable $exception) {
             $this->pdo->rollBack();
             $this->pdo->beginTransaction();
             try {
-                $this->addQueueCredits();
-                $claimed = $this->claimWithFallback($limit, $agingCutoff);
+                if ($queue === 'standard') {
+                    $this->addQueueCredits();
+                }
+                $claimed = $queue === 'technical'
+                    ? $this->claimTechnicalWithFallback()
+                    : $this->claimWithFallback($limit, $agingCutoff);
                 $ids = array_column($claimed, 'id');
                 if ($ids !== []) {
                     $this->setProcessing($ids, $leaseId, $leaseExpiresAt);
-                    $this->spendQueueCredits($claimed);
+                    if ($queue === 'standard') {
+                        $this->spendQueueCredits($claimed);
+                    }
                 }
                 $this->pdo->commit();
             } catch (\Throwable $fallbackException) {
@@ -419,7 +435,8 @@ final class EmailQueueRepository
             'SELECT q.id, q.status, q.source_app
              FROM email_queue q
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
-             WHERE (q.status = "pending" OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP))
+             WHERE q.priority <> "technical"
+               AND (q.status = "pending" OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP))
              ORDER BY (q.priority = "high" OR q.created_at <= :aging_cutoff) DESC, c.queue_credit DESC, q.created_at ASC
              LIMIT :limit
              FOR UPDATE SKIP LOCKED'
@@ -439,12 +456,63 @@ final class EmailQueueRepository
             'SELECT q.id, q.status, q.source_app
              FROM email_queue q
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
-             WHERE (q.status = "pending" OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP))
+             WHERE q.priority <> "technical"
+               AND (q.status = "pending" OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP))
              ORDER BY (q.priority = "high" OR q.created_at <= :aging_cutoff) DESC, c.queue_credit DESC, q.created_at ASC
              LIMIT :limit' . $lockClause
         );
         $stmt->bindValue('aging_cutoff', $agingCutoff);
         $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    /** @return list<array{id: string, status: string, source_app: string}> */
+    private function claimTechnicalWithSkipLocked(): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT q.id, q.status, q.source_app
+             FROM email_queue q
+             INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
+             WHERE q.priority = "technical"
+               AND q.status IN ("pending", "retry")
+               AND NOT EXISTS (
+                   SELECT 1 FROM email_queue older
+                   WHERE older.priority = "technical"
+                     AND older.status IN ("pending", "retry", "processing")
+                     AND (older.created_at < q.created_at OR (older.created_at = q.created_at AND older.id < q.id))
+               )
+               AND (q.status = "pending" OR q.next_attempt_at <= CURRENT_TIMESTAMP)
+             ORDER BY q.created_at ASC, q.id ASC
+             LIMIT 1
+             FOR UPDATE SKIP LOCKED'
+        );
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    /** @return list<array{id: string, status: string, source_app: string}> */
+    private function claimTechnicalWithFallback(): array
+    {
+        $lockClause = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' ? '' : ' FOR UPDATE';
+        $stmt = $this->pdo->prepare(
+            'SELECT q.id, q.status, q.source_app
+             FROM email_queue q
+             INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
+             WHERE q.priority = "technical"
+               AND q.status IN ("pending", "retry")
+               AND NOT EXISTS (
+                   SELECT 1 FROM email_queue older
+                   WHERE older.priority = "technical"
+                     AND older.status IN ("pending", "retry", "processing")
+                     AND (older.created_at < q.created_at OR (older.created_at = q.created_at AND older.id < q.id))
+               )
+               AND (q.status = "pending" OR q.next_attempt_at <= CURRENT_TIMESTAMP)
+             ORDER BY q.created_at ASC, q.id ASC
+             LIMIT 1' . $lockClause
+        );
         $stmt->execute();
 
         return $stmt->fetchAll();
@@ -480,7 +548,7 @@ final class EmailQueueRepository
              LEFT JOIN email_messages m ON m.id = q.message_id
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
              WHERE q.id IN ($placeholders) AND q.status = 'processing' AND q.lease_id = ?
-             ORDER BY q.priority = 'high' DESC, q.created_at ASC"
+             ORDER BY q.created_at ASC, q.id ASC"
         );
         $stmt->execute([...$ids, $leaseId]);
 
