@@ -61,7 +61,10 @@ EMAIL_ATTACHMENT_MAX_TOTAL_BYTES=5000000
 EMAIL_ATTACHMENT_ALLOWED_MIME_TYPES=image/png,application/pdf
 
 LOG_LEVEL=info
+LOG_DIR=
 ```
+
+Leave `LOG_DIR` empty to use `storage/logs`. On a deployed server, set it only to an absolute path.
 
 On startup, legacy `.env` keys are inserted into `email_clients` only if the corresponding client does not exist:
 
@@ -95,6 +98,17 @@ Then run the clients, batch, attachments, and event history migration:
 ```bash
 mysql -u root -p central_mailer < database/migrations/003_add_clients_batches_attachments_events.sql
 ```
+
+The deploy workflow uses the migration runner instead of invoking SQL files manually:
+
+```bash
+php scripts/run-migrations.php
+php scripts/run-migrations.php --dry-run
+php scripts/run-migrations.php --baseline
+```
+
+Use `--baseline` once for an existing database that already has the current schema but does not have the
+`schema_migrations` table. Use the normal command for a new empty database and for later deployments.
 
 Example client configuration:
 
@@ -343,6 +357,35 @@ sudo systemctl daemon-reload
 sudo systemctl enable central-mailer-worker
 sudo systemctl start central-mailer-worker
 ```
+
+## GitHub Actions deployment
+
+The workflow in `.github/workflows/deploy.yml` deploys the API to the `staging` or `production` GitHub
+environment. A push to `main` or `master` deploys to staging with migrations enabled. A production deploy
+must be started manually with `confirm_production=DEPLOY_PRODUCTION`.
+
+Configure these secrets separately in both GitHub environments:
+
+- `SSH_HOST`
+- `SSH_PORT`
+- `SSH_USER`
+- `SSH_PRIVATE_KEY`
+- `SSH_KNOWN_HOSTS`
+- `BACKEND_REMOTE_DIR`
+- `BACKEND_ALLOWED_ROOT`
+- `BACKEND_BACKUP_DIR`
+- `API_URL`
+
+Before the first deployment, create the target directory, its `.env`, an empty
+`.central-mailer-api-root` marker file, and a `public_html` directory. `BACKEND_REMOTE_DIR` must be inside
+`BACKEND_ALLOWED_ROOT`, while `BACKEND_BACKUP_DIR` must be outside `BACKEND_REMOTE_DIR`.
+The server must provide `php`, `realpath`, `rsync`, `unzip`, `mysqldump`, and `gzip`. Set `APP_ENV=staging`
+or `APP_ENV=production` in each target `.env` to match its GitHub environment.
+
+The web server document root should be `public_html`. The workflow synchronizes it from `public`, removing
+old frontend files while preserving `.well-known` for certificate validation. Application code, `.env`,
+logs, attachments, and database backups stay outside the public web directory. Configure the worker
+separately through cron or systemd after deployment.
 
 ## Security
 

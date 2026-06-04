@@ -22,7 +22,8 @@ if (file_exists($root . '/.env')) {
 }
 
 $env = new Env($_ENV);
-$logger = LoggerFactory::create($env, $root . '/storage/logs/worker.log');
+$logDir = $env->string('LOG_DIR', $root . '/storage/logs');
+$logger = LoggerFactory::create($env, rtrim($logDir, '/\\') . '/worker.log');
 $pdo = Connection::create($env);
 $clients = new ClientRepository($pdo);
 $clients->syncLegacyClients($env);
