@@ -40,6 +40,7 @@ DB_PORT=3306
 DB_DATABASE=central_mailer
 DB_USERNAME=root
 DB_PASSWORD=secret
+DATABASE_DUMP_BIN=
 
 API_KEY_APP_A=change-me-app-a
 API_KEY_APP_B=change-me-app-b
@@ -466,10 +467,17 @@ Configure these secrets separately in both GitHub environments:
 - `API_URL`
 
 Before the first deployment, create the target directory, its `.env`, an empty
-`.central-mailer-api-root` marker file, and shared `storage/logs` and `storage/attachments` directories. Do not create
-`public_html` as a directory; the workflow manages it as an atomic symlink to the active release. `BACKEND_REMOTE_DIR` must be inside
+`.central-mailer-api-root` marker file, and shared `storage/logs` and `storage/attachments` directories. The workflow
+prefers to manage `public_html` as an atomic symlink to the active release. On shared hosting, an existing
+`public_html` directory is supported: the workflow publishes into it with `rsync`, preserves `.well-known`, and restores
+the previous files if the health check fails. In directory mode, `public_html/index.php` loads application code through
+the `current` symlink. `BACKEND_REMOTE_DIR` must be inside
 `BACKEND_ALLOWED_ROOT`, while `BACKEND_BACKUP_DIR` must be outside `BACKEND_REMOTE_DIR`.
-The server must provide `php`, `realpath`, `rsync`, `unzip`, `mysqldump`, `gzip`, and `curl`. Set `APP_ENV=staging`
+The server must provide `php`, `realpath`, `rsync`, `unzip`, `mariadb-dump` or `mysqldump`, `gzip`, and `curl`.
+The workflow prefers `mariadb-dump` to avoid deprecated MariaDB compatibility aliases. If it is not available in
+`PATH`, it also checks `/usr/local/mariadb-*/bin/mariadb-dump`. Set `DATABASE_DUMP_BIN` to its absolute executable
+path when automatic detection is not sufficient, for example
+`/usr/local/mariadb-10.11.9-EYzc/bin/mariadb-dump`. Set `APP_ENV=staging`
 or `APP_ENV=production` in each target `.env` to match its GitHub environment.
 
 The web server document root should be `public_html`, and worker services should execute

@@ -199,7 +199,6 @@ jobs:
           command -v php >/dev/null
           command -v rsync >/dev/null
           command -v unzip >/dev/null
-          command -v mysqldump >/dev/null
           command -v curl >/dev/null
           command -v openssl >/dev/null
           command -v mv >/dev/null
@@ -296,8 +295,38 @@ jobs:
           DB_PASSWORD="$(get_env DB_PASSWORD)"
           APP_ENV="$(get_env APP_ENV)"
           LOG_DIR="$(get_env LOG_DIR)"
+          CONFIGURED_DATABASE_DUMP_BIN="$(get_env DATABASE_DUMP_BIN)"
           BACKUP_RETENTION_DAYS="$(get_env BACKUP_RETENTION_DAYS)"
           BACKUP_ENCRYPTION_KEY="$(get_env BACKUP_ENCRYPTION_KEY)"
+
+          MYSQLDUMP_BIN="$(command -v mysqldump || true)"
+          DATABASE_DUMP_BIN="$CONFIGURED_DATABASE_DUMP_BIN"
+          if [ -n "$DATABASE_DUMP_BIN" ] && [ ! -x "$DATABASE_DUMP_BIN" ]; then
+            echo "Configured DATABASE_DUMP_BIN is not executable: $DATABASE_DUMP_BIN"
+            exit 33
+          fi
+          if [ -z "$DATABASE_DUMP_BIN" ]; then
+            DATABASE_DUMP_BIN="$(command -v mariadb-dump || true)"
+          fi
+          if [ -z "$DATABASE_DUMP_BIN" ] && [ -n "$MYSQLDUMP_BIN" ] && [ -x "$(dirname "$MYSQLDUMP_BIN")/mariadb-dump" ]; then
+            DATABASE_DUMP_BIN="$(dirname "$MYSQLDUMP_BIN")/mariadb-dump"
+          fi
+          if [ -z "$DATABASE_DUMP_BIN" ]; then
+            for candidate in /usr/local/mariadb-*/bin/mariadb-dump; do
+              if [ -x "$candidate" ]; then
+                DATABASE_DUMP_BIN="$candidate"
+                break
+              fi
+            done
+          fi
+          if [ -z "$DATABASE_DUMP_BIN" ]; then
+            DATABASE_DUMP_BIN="$MYSQLDUMP_BIN"
+          fi
+          if [ -z "$DATABASE_DUMP_BIN" ]; then
+            echo "Neither mariadb-dump nor mysqldump is available."
+            exit 33
+          fi
+
           if [ -z "$BACKUP_RETENTION_DAYS" ]; then
             BACKUP_RETENTION_DAYS=30
           fi
@@ -366,7 +395,7 @@ jobs:
 
           export BACKUP_ENCRYPTION_KEY
           BACKUP_FILE="$BACKEND_BACKUP_DIR_REAL/predeploy-$TARGET_ENV-$(date +%Y%m%d-%H%M%S).sql.gz.enc"
-          mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers "$DB_DATABASE" \
+          "$DATABASE_DUMP_BIN" --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers "$DB_DATABASE" \
             | gzip -c \
             | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_ENCRYPTION_KEY \
             > "$BACKUP_FILE"
@@ -421,6 +450,8 @@ jobs:
 
           PUBLIC_DIR="$RELEASE_DIR/public"
           PUBLIC_HTML="$BACKEND_REMOTE_DIR_REAL/public_html"
+          PUBLICATION_MODE="symlink"
+          PUBLIC_HTML_BACKUP=""
 
           if [ ! -f "$PUBLIC_DIR/index.php" ] || [ ! -f "$PUBLIC_DIR/.htaccess" ]; then
             echo "Missing API public entrypoint files in $PUBLIC_DIR"
@@ -428,8 +459,11 @@ jobs:
           fi
 
           if [ -e "$PUBLIC_HTML" ] && [ ! -L "$PUBLIC_HTML" ]; then
-            echo "public_html must be a symlink managed by the deployment workflow: $PUBLIC_HTML"
-            exit 29
+            if [ ! -d "$PUBLIC_HTML" ]; then
+              echo "public_html exists but is neither a directory nor a symlink: $PUBLIC_HTML"
+              exit 29
+            fi
+            PUBLICATION_MODE="directory"
           fi
 
           php "$RELEASE_DIR/scripts/validate-config.php"
@@ -451,25 +485,48 @@ jobs:
               ;;
           esac
 
+          if [ "$PUBLICATION_MODE" = "directory" ]; then
+            PUBLIC_HTML_BACKUP="$BACKEND_REMOTE_DIR_REAL/.deploy/public_html-backup-$DEPLOY_ID"
+            if [ -e "$PUBLIC_HTML_BACKUP" ]; then
+              echo "public_html backup target already exists: $PUBLIC_HTML_BACKUP"
+              exit 29
+            fi
+            mkdir -p "$PUBLIC_HTML_BACKUP"
+            rsync -a --exclude='.well-known/' "$PUBLIC_HTML/" "$PUBLIC_HTML_BACKUP/"
+            rsync -a --delete --exclude='.well-known/' "$RELEASE_DIR/public/" "$PUBLIC_HTML/"
+            echo "Published release into existing public_html directory."
+          fi
+
           PREVIOUS_RELEASE="$(readlink "$BACKEND_REMOTE_DIR_REAL/current" || true)"
           ln -s "$RELEASE_DIR" "$BACKEND_REMOTE_DIR_REAL/.deploy/current-$DEPLOY_ID"
           mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/current-$DEPLOY_ID" "$BACKEND_REMOTE_DIR_REAL/current"
-          ln -s "$RELEASE_DIR/public" "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID"
-          mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID" "$PUBLIC_HTML"
+          if [ "$PUBLICATION_MODE" = "symlink" ]; then
+            ln -s "$RELEASE_DIR/public" "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID"
+            mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID" "$PUBLIC_HTML"
+          fi
 
           if ! curl --fail --show-error --location "${API_URL%/}/health"; then
             if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
               ln -s "$PREVIOUS_RELEASE" "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-current-$DEPLOY_ID"
               mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-current-$DEPLOY_ID" "$BACKEND_REMOTE_DIR_REAL/current"
+            else
+              rm -f -- "$BACKEND_REMOTE_DIR_REAL/current"
+            fi
+            if [ "$PUBLICATION_MODE" = "directory" ] && [ -d "$PUBLIC_HTML_BACKUP" ]; then
+              rsync -a --delete --exclude='.well-known/' "$PUBLIC_HTML_BACKUP/" "$PUBLIC_HTML/"
+            elif [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
               ln -s "$PREVIOUS_RELEASE/public" "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-public-$DEPLOY_ID"
               mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-public-$DEPLOY_ID" "$PUBLIC_HTML"
             else
-              rm -f -- "$BACKEND_REMOTE_DIR_REAL/current" "$PUBLIC_HTML"
+              rm -f -- "$PUBLIC_HTML"
             fi
-            echo "Health check failed; application symlinks were rolled back."
+            echo "Health check failed; application publication was rolled back."
             exit 39
           fi
 
+          if [ -n "$PUBLIC_HTML_BACKUP" ] && [ -d "$PUBLIC_HTML_BACKUP" ]; then
+            rm -rf -- "$PUBLIC_HTML_BACKUP"
+          fi
           find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -path "$RELEASE_DIR" -mtime +14 -exec rm -rf -- {} +
           echo "Activated API release $RELEASE_DIR"
           REMOTE
