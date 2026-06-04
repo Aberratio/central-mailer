@@ -14,9 +14,19 @@ final class RateLimitRepositoryTest extends DatabaseTestCase
         $repository = new RateLimitRepository($this->pdo);
         $since = (new \DateTimeImmutable('-15 minutes'))->format('Y-m-d H:i:s');
 
-        self::assertTrue($repository->tryReserve(2, $since));
-        self::assertTrue($repository->tryReserve(2, $since));
-        self::assertFalse($repository->tryReserve(2, $since));
+        self::assertTrue($repository->tryReserve('app-a', 2, $since, null, $since, $since));
+        self::assertTrue($repository->tryReserve('app-a', 2, $since, null, $since, $since));
+        self::assertFalse($repository->tryReserve('app-a', 2, $since, null, $since, $since));
         self::assertSame(2, (int) $this->pdo->query('SELECT COUNT(*) FROM email_rate_limit_reservations')->fetchColumn());
+    }
+
+    public function testEnforcesPerClientLimitWithoutBlockingAnotherClient(): void
+    {
+        $repository = new RateLimitRepository($this->pdo);
+        $since = (new \DateTimeImmutable('-15 minutes'))->format('Y-m-d H:i:s');
+
+        self::assertTrue($repository->tryReserve('app-a', 10, $since, 1, $since, $since));
+        self::assertFalse($repository->tryReserve('app-a', 10, $since, 1, $since, $since));
+        self::assertTrue($repository->tryReserve('app-b', 10, $since, 1, $since, $since));
     }
 }

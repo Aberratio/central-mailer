@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace CentralMailer\Http\Middleware;
 
-use CentralMailer\Config\Env;
+use CentralMailer\Client\ClientRepository;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
@@ -13,12 +13,8 @@ use Slim\Psr7\Response;
 
 final class ApiKeyAuthMiddleware implements MiddlewareInterface
 {
-    /** @var array<string, string> */
-    private array $apiKeys;
-
-    public function __construct(Env $env)
+    public function __construct(private readonly ClientRepository $clients)
     {
-        $this->apiKeys = $env->apiKeys();
     }
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
@@ -30,7 +26,7 @@ final class ApiKeyAuthMiddleware implements MiddlewareInterface
         }
 
         $apiKey = $request->getHeaderLine('X-API-Key');
-        $sourceApp = $this->sourceAppForKey($apiKey);
+        $sourceApp = $this->clients->sourceAppForApiKey($apiKey);
 
         if ($sourceApp === null) {
             $response = new Response(401);
@@ -40,20 +36,5 @@ final class ApiKeyAuthMiddleware implements MiddlewareInterface
         }
 
         return $handler->handle($request->withAttribute('sourceApp', $sourceApp));
-    }
-
-    private function sourceAppForKey(string $apiKey): ?string
-    {
-        if ($apiKey === '') {
-            return null;
-        }
-
-        foreach ($this->apiKeys as $sourceApp => $configuredKey) {
-            if (hash_equals($configuredKey, $apiKey)) {
-                return $sourceApp;
-            }
-        }
-
-        return null;
     }
 }

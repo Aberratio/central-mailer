@@ -1,6 +1,6 @@
 # Central Mailer SMTP
 
-A lightweight PHP backend service for centralized, queued email sending from two applications. The API stores messages in MySQL/MariaDB, while a separate CLI worker sends them through SMTP with retries, a global rate limit, and status logging.
+A lightweight PHP backend service for centralized, queued email sending from multiple applications. The API stores messages in MySQL/MariaDB, while a separate CLI worker sends them through SMTP with retries, fair scheduling, rate limits, attachments, and status history.
 
 Stack: PHP 8.2+, Slim Framework, MySQL/MariaDB, PHPMailer, vlucas/phpdotenv, Monolog.
 
@@ -10,7 +10,7 @@ Stack: PHP 8.2+, Slim Framework, MySQL/MariaDB, PHPMailer, vlucas/phpdotenv, Mon
 - Composer
 - MySQL 8.0+ or MariaDB 10.6+
 - SMTP access, for example CyberFolks/SeoHost
-- PHP extensions: `pdo`, `pdo_mysql`, `json`, `mbstring`
+- PHP extensions: `pdo`, `pdo_mysql`, `json`, `mbstring`, `fileinfo`
 
 ## Installation
 
@@ -51,18 +51,24 @@ SMTP_DEBUG_LEVEL=0
 
 EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
+EMAIL_RATE_LIMIT_RESERVATION_RETENTION_MINUTES=10080
 EMAIL_WORKER_BATCH_SIZE=20
 EMAIL_WORKER_SLEEP_SECONDS=10
+EMAIL_PRIORITY_AGING_SECONDS=900
+EMAIL_BATCH_MAX_RECIPIENTS=1000
+EMAIL_ATTACHMENT_MAX_COUNT=5
+EMAIL_ATTACHMENT_MAX_TOTAL_BYTES=5000000
+EMAIL_ATTACHMENT_ALLOWED_MIME_TYPES=image/png,application/pdf
 
 LOG_LEVEL=info
 ```
 
-`sourceApp` is mapped from the API key:
+On startup, legacy `.env` keys are inserted into `email_clients` only if the corresponding client does not exist:
 
 - `API_KEY_APP_A` -> `app-a`
 - `API_KEY_APP_B` -> `app-b`
 
-The backend does not trust the `sourceApp` field from the request body.
+The database table `email_clients` is the source of truth for authentication, activation, queue weights, and optional per-client rate limits. The backend does not trust the `sourceApp` field from the request body.
 
 ## Database and migration
 
@@ -83,6 +89,23 @@ For an existing database created before delivery-safety support, run:
 ```bash
 mysql -u root -p central_mailer < database/migrations/002_add_delivery_safety.sql
 ```
+
+Then run the clients, batch, attachments, and event history migration:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/003_add_clients_batches_attachments_events.sql
+```
+
+Example client configuration:
+
+```sql
+INSERT INTO email_clients
+  (source_app, api_key_hash, active, queue_weight, rate_limit_count, rate_limit_window_minutes, created_at, updated_at)
+VALUES
+  ('billing', SHA2('replace-with-long-random-key', 256), 1, 2, 50, 15, NOW(), NOW());
+```
+
+Rotate a key by updating `api_key_hash`. A larger `queue_weight` gives the client a larger share of available sending capacity.
 
 ## Local run
 
@@ -158,6 +181,44 @@ Response:
 
 The SMTP `Message-ID` is derived from the queue ID and stays stable across retries. This reduces duplicate-delivery risk after an uncertain SMTP result, but SMTP cannot provide a strict exactly-once delivery guarantee.
 
+### Add an attachment
+
+Attachments are optional and intended for exceptional cases such as QR-code PNG files:
+
+```json
+{
+  "to": "recipient@example.com",
+  "subject": "QR code",
+  "html": "<p>Your QR code is attached.</p>",
+  "attachments": [
+    {
+      "filename": "qr.png",
+      "contentBase64": "iVBORw0KGgo..."
+    }
+  ]
+}
+```
+
+The service validates the real MIME type, stores the file under `storage/attachments`, and deletes it after the message reaches `sent` or `failed`. Multiple worker hosts must share this directory. Batch requests do not support attachments.
+
+### Add a batch
+
+`POST /emails/batch` stores the common subject and body once, then creates one queue record per recipient:
+
+```json
+{
+  "subject": "Newsletter",
+  "html": "<p>Hello</p>",
+  "priority": "normal",
+  "recipients": [
+    {"to": "one@example.com", "metadata": {"userId": 1}},
+    {"to": "two@example.com", "metadata": {"userId": 2}}
+  ]
+}
+```
+
+Use `Idempotency-Key` for batch requests as well.
+
 ### Check status
 
 ```bash
@@ -166,6 +227,8 @@ curl -X GET http://localhost:8080/emails/{id} \
 ```
 
 An application can read only its own messages. The `app-a` API key will not see emails added by `app-b`.
+
+Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and SMTP acceptance.
 
 ### Add a test email
 
@@ -188,10 +251,13 @@ The test endpoint adds the message to the normal queue. It does not send it dire
 
 ## Worker, retry, and ordering
 
-The worker fetches a batch limited by `EMAIL_WORKER_BATCH_SIZE` and the global rate limit. Ordering:
+The worker fetches a batch limited by `EMAIL_WORKER_BATCH_SIZE` and the rate limits. Scheduling uses:
 
-1. `priority = high`
-2. `created_at ASC`
+1. effective high priority
+2. weighted fairness between clients
+3. `created_at ASC`
+
+Normal messages older than `EMAIL_PRIORITY_AGING_SECONDS` receive effective high priority, so a constant stream of high-priority messages cannot starve them.
 
 For MySQL/MariaDB versions that support `SELECT ... FOR UPDATE SKIP LOCKED`, the worker uses that mechanism. If the database does not support it, the fallback uses transactional `FOR UPDATE`, which is safe but can block parallel workers. Each claimed message receives a processing lease, so a delayed worker cannot overwrite a status written by a newer worker.
 
@@ -199,7 +265,7 @@ Retry uses exponential backoff: 60s, 120s, 240s, 480s, up to a maximum of 3600s.
 
 ## Rate limit
 
-The limit is global for both applications together:
+The global limit applies to all applications together:
 
 ```dotenv
 EMAIL_RATE_LIMIT_COUNT=100
@@ -208,6 +274,8 @@ EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
 
 Before each send attempt, the worker atomically reserves a rate-limit slot in the database. Reservations are serialized across all workers and count for the configured rolling window, including failed or uncertain SMTP attempts. If the limit is reached, the claimed message is returned to the queue without increasing its attempt count.
 
+Each `email_clients` row can also define `rate_limit_count` and `rate_limit_window_minutes`. A client that reaches its own limit does not consume the remaining capacity of other clients.
+
 ## Logging
 
 Logs are written to:
@@ -215,7 +283,7 @@ Logs are written to:
 - `storage/logs/app.log`
 - `storage/logs/worker.log`
 
-Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, and rate limiting. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
+Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, and rate limiting. Persistent event history is stored in `email_events`. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
 
 ## CyberFolks/SeoHost SMTP configuration
 
@@ -278,11 +346,11 @@ sudo systemctl start central-mailer-worker
 
 ## Security
 
-- API keys and the SMTP password are stored only in `.env`.
-- One request adds one recipient.
+- API keys are stored as SHA-256 hashes in `email_clients`; the SMTP password remains in `.env`.
+- A single request adds one recipient, while `/emails/batch` adds multiple recipients with shared content.
 - There is no CC/BCC.
 - `from` always comes from `.env`.
-- The email address, priority, subject length, and body size are validated.
+- The email address, priority, subject length, body size, metadata size, attachment count, attachment size, and attachment MIME type are validated.
 - Applications are isolated by `sourceApp`, which is derived from the API key.
 
 ## How to switch SMTP to Brevo later
@@ -304,6 +372,6 @@ The rest of the application does not require changes because `EmailWorker` depen
 - `401 Invalid or missing API key`: check the `X-API-Key` header and the `API_KEY_APP_A` / `API_KEY_APP_B` values.
 - `Email not found`: the message does not exist, or the API key belongs to another application.
 - No sending: check whether the worker is running and whether records are in `retry` with a future `next_attempt_at`.
-- Rate limit blocks sending: check `EMAIL_RATE_LIMIT_COUNT`, `EMAIL_RATE_LIMIT_WINDOW_MINUTES`, and the number of `sent` records.
+- Rate limit blocks sending: check the global `.env` limit, the client limit in `email_clients`, and recent rows in `email_rate_limit_reservations`.
 - SMTP error: check host, port, `SMTP_SECURE`, full email login, and mailbox password.
 - JSON migration issue in older MariaDB versions: make sure the database version supports the `JSON` type, or change the `metadata JSON NULL` column to `metadata LONGTEXT NULL`.

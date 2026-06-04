@@ -129,6 +129,39 @@ HTML;
                         ],
                     ],
                 ],
+                '/emails/batch' => [
+                    'post' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Dodaje paczke e-maili ze wspolna trescia',
+                        'operationId' => 'createEmailBatch',
+                        'security' => [['ApiKeyAuth' => []]],
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/IdempotencyKey'],
+                        ],
+                        'requestBody' => [
+                            'required' => true,
+                            'content' => [
+                                'application/json' => [
+                                    'schema' => ['$ref' => '#/components/schemas/EmailBatchRequest'],
+                                ],
+                            ],
+                        ],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Powtorzone zadanie batch.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailBatchResponse']]],
+                            ],
+                            '201' => [
+                                'description' => 'Paczka zostala dodana do kolejki.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailBatchResponse']]],
+                            ],
+                            '400' => ['$ref' => '#/components/responses/ValidationError'],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
                 '/emails/test' => [
                     'post' => [
                         'tags' => ['Emails'],
@@ -204,6 +237,26 @@ HTML;
                         ],
                     ],
                 ],
+                '/emails/{id}/events' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Pobiera historie statusow i prob wysylki',
+                        'operationId' => 'getEmailEvents',
+                        'security' => [['ApiKeyAuth' => []]],
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/EmailId'],
+                        ],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Historia zdarzen wiadomosci.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailEventsResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '404' => ['$ref' => '#/components/responses/NotFoundError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
             ],
             'components' => [
                 'parameters' => [
@@ -216,6 +269,15 @@ HTML;
                             'type' => 'string',
                             'maxLength' => 255,
                             'example' => 'order-confirmation-12345',
+                        ],
+                    ],
+                    'EmailId' => [
+                        'name' => 'id',
+                        'in' => 'path',
+                        'required' => true,
+                        'schema' => [
+                            'type' => 'string',
+                            'format' => 'uuid',
                         ],
                     ],
                 ],
@@ -262,6 +324,53 @@ HTML;
                                 'nullable' => true,
                                 'additionalProperties' => true,
                                 'example' => ['userId' => 123],
+                            ],
+                            'attachments' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailAttachmentRequest'],
+                            ],
+                        ],
+                    ],
+                    'EmailAttachmentRequest' => [
+                        'type' => 'object',
+                        'required' => ['filename', 'contentBase64'],
+                        'properties' => [
+                            'filename' => ['type' => 'string', 'maxLength' => 255, 'example' => 'qr.png'],
+                            'contentBase64' => ['type' => 'string', 'format' => 'byte'],
+                        ],
+                    ],
+                    'EmailBatchRequest' => [
+                        'type' => 'object',
+                        'required' => ['subject', 'html', 'recipients'],
+                        'properties' => [
+                            'subject' => ['type' => 'string', 'maxLength' => 255],
+                            'html' => ['type' => 'string', 'maxLength' => 1000000],
+                            'text' => ['type' => 'string', 'nullable' => true, 'maxLength' => 1000000],
+                            'priority' => ['type' => 'string', 'enum' => ['normal', 'high'], 'default' => 'normal'],
+                            'metadata' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
+                            'recipients' => [
+                                'type' => 'array',
+                                'minItems' => 1,
+                                'items' => ['$ref' => '#/components/schemas/EmailBatchRecipient'],
+                            ],
+                        ],
+                    ],
+                    'EmailBatchRecipient' => [
+                        'type' => 'object',
+                        'required' => ['to'],
+                        'properties' => [
+                            'to' => ['type' => 'string', 'format' => 'email'],
+                            'metadata' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
+                        ],
+                    ],
+                    'EmailBatchResponse' => [
+                        'type' => 'object',
+                        'required' => ['id', 'emails'],
+                        'properties' => [
+                            'id' => ['type' => 'string', 'format' => 'uuid'],
+                            'emails' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailQueuedResponse'],
                             ],
                         ],
                     ],
@@ -330,6 +439,36 @@ HTML;
                                 'format' => 'date-time',
                                 'nullable' => true,
                             ],
+                            'batchId' => [
+                                'type' => 'string',
+                                'format' => 'uuid',
+                                'nullable' => true,
+                            ],
+                        ],
+                    ],
+                    'EmailEventsResponse' => [
+                        'type' => 'object',
+                        'required' => ['id', 'events'],
+                        'properties' => [
+                            'id' => ['type' => 'string', 'format' => 'uuid'],
+                            'events' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailEvent'],
+                            ],
+                        ],
+                    ],
+                    'EmailEvent' => [
+                        'type' => 'object',
+                        'required' => ['type', 'status', 'attempt', 'createdAt'],
+                        'properties' => [
+                            'type' => ['type' => 'string'],
+                            'status' => ['type' => 'string'],
+                            'attempt' => ['type' => 'integer'],
+                            'errorCode' => ['type' => 'string', 'nullable' => true],
+                            'errorMessage' => ['type' => 'string', 'nullable' => true],
+                            'providerMessageId' => ['type' => 'string', 'nullable' => true],
+                            'details' => ['type' => 'object', 'nullable' => true, 'additionalProperties' => true],
+                            'createdAt' => ['type' => 'string', 'format' => 'date-time'],
                         ],
                     ],
                     'ErrorResponse' => [

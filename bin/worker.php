@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use CentralMailer\Config\Env;
+use CentralMailer\Client\ClientRepository;
+use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Database\Connection;
 use CentralMailer\Email\SmtpEmailProvider;
 use CentralMailer\Logging\LoggerFactory;
@@ -22,13 +24,16 @@ if (file_exists($root . '/.env')) {
 $env = new Env($_ENV);
 $logger = LoggerFactory::create($env, $root . '/storage/logs/worker.log');
 $pdo = Connection::create($env);
+$clients = new ClientRepository($pdo);
+$clients->syncLegacyClients($env);
 
 $worker = new EmailWorker(
     new EmailQueueRepository($pdo),
     new SmtpEmailProvider($env),
     new RateLimiter(new RateLimitRepository($pdo), $env),
     $logger,
-    $env
+    $env,
+    new AttachmentStorage($root . '/storage/attachments')
 );
 
 $logger->info('Email worker started');
