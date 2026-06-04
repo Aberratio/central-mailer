@@ -11,6 +11,7 @@ use CentralMailer\Email\EmailSendResult;
 use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\RateLimiter;
 use CentralMailer\Queue\RateLimitRepository;
+use CentralMailer\Support\Uuid;
 use CentralMailer\Tests\Support\DatabaseTestCase;
 use Psr\Log\NullLogger;
 
@@ -39,7 +40,8 @@ final class EmailWorkerTest extends DatabaseTestCase
             $provider,
             new RateLimiter(new RateLimitRepository($this->pdo), $env),
             new NullLogger(),
-            $env
+            $env,
+            $this->attachmentStorage
         );
 
         $worker->runOnce();
@@ -68,7 +70,8 @@ final class EmailWorkerTest extends DatabaseTestCase
             $provider,
             new RateLimiter(new RateLimitRepository($this->pdo), $env),
             new NullLogger(),
-            $env
+            $env,
+            $this->attachmentStorage
         );
 
         $worker->runOnce();
@@ -77,5 +80,62 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame('pending', $row['status']);
         self::assertNull($row['lease_id']);
         self::assertSame(0, $row['attempts']);
+    }
+
+    public function testSendsAttachmentRecordsEventAndCleansLocalFile(): void
+    {
+        $emailId = Uuid::v4();
+        $content = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=',
+            true
+        );
+        $attachments = $this->attachmentStorage->store($emailId, [[
+            'filename' => 'qr.png',
+            'contentType' => 'image/png',
+            'content' => $content,
+            'sizeBytes' => strlen($content),
+            'sha256' => hash('sha256', $content),
+        ]]);
+        $this->repository->insert([
+            'id' => $emailId,
+            'sourceApp' => 'app-a',
+            'idempotencyKey' => null,
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'QR',
+            'html' => '<p>QR</p>',
+            'text' => null,
+            'priority' => 'normal',
+            'metadata' => null,
+            'attachments' => $attachments,
+        ]);
+        $path = $this->attachmentStorage->absolutePath($attachments[0]['storagePath']);
+        $provider = new class implements EmailProviderInterface {
+            public int $attachmentCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->attachmentCount = count($message->attachments);
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '1']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage
+        );
+
+        $worker->runOnce();
+
+        self::assertSame(1, $provider->attachmentCount);
+        self::assertSame('sent', $this->fetchQueueRow($emailId)['status']);
+        self::assertFileDoesNotExist($path);
+        self::assertSame(1, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '$emailId' AND event_type = 'sent'"
+        )->fetchColumn());
     }
 }

@@ -11,6 +11,7 @@ final class EmailRequestValidator
     private const MAX_SUBJECT_LENGTH = 255;
     private const MAX_HTML_BYTES = 1_000_000;
     private const MAX_TEXT_BYTES = 1_000_000;
+    private const MAX_METADATA_BYTES = 64_000;
     private const NON_DELIVERABLE_DOMAINS = [
         'example.com',
         'example.net',
@@ -30,6 +31,7 @@ final class EmailRequestValidator
         $text = $this->optionalString($payload['text'] ?? null, 'text');
         $priority = $payload['priority'] ?? 'normal';
         $metadata = $payload['metadata'] ?? null;
+        $attachments = $this->attachments($payload['attachments'] ?? []);
 
         if (mb_strlen($subject) > self::MAX_SUBJECT_LENGTH) {
             throw new \InvalidArgumentException('Subject is too long');
@@ -50,6 +52,9 @@ final class EmailRequestValidator
         if ($metadata !== null && !is_array($metadata)) {
             throw new \InvalidArgumentException('Metadata must be an object');
         }
+        if ($metadata !== null && strlen(json_encode($metadata, JSON_THROW_ON_ERROR)) > self::MAX_METADATA_BYTES) {
+            throw new \InvalidArgumentException('Metadata is too large');
+        }
 
         return [
             'to' => $to,
@@ -58,7 +63,64 @@ final class EmailRequestValidator
             'text' => $text,
             'priority' => $priority,
             'metadata' => $metadata,
+            'attachments' => $attachments,
         ];
+    }
+
+    /** @param array<string, mixed> $payload */
+    public function validateBatchPayload(array $payload): array
+    {
+        if (isset($payload['attachments'])) {
+            throw new \InvalidArgumentException('Attachments are not supported for batch requests');
+        }
+
+        $recipients = $payload['recipients'] ?? null;
+        if (!is_array($recipients) || $recipients === []) {
+            throw new \InvalidArgumentException('Recipients must be a non-empty array');
+        }
+        $maxRecipients = $this->env->int('EMAIL_BATCH_MAX_RECIPIENTS', 1000);
+        if (count($recipients) > $maxRecipients) {
+            throw new \InvalidArgumentException(sprintf('Batch cannot contain more than %d recipients', $maxRecipients));
+        }
+
+        $firstRecipient = $recipients[0];
+        if (!is_array($firstRecipient)) {
+            throw new \InvalidArgumentException('Recipient at index 0 must be an object');
+        }
+
+        $common = $this->validateQueuePayload([
+            'to' => $firstRecipient['to'] ?? null,
+            'subject' => $payload['subject'] ?? null,
+            'html' => $payload['html'] ?? null,
+            'text' => $payload['text'] ?? null,
+            'priority' => $payload['priority'] ?? 'normal',
+            'metadata' => $payload['metadata'] ?? null,
+        ]);
+        unset($common['to'], $common['attachments']);
+
+        $validatedRecipients = [];
+        foreach ($recipients as $index => $recipient) {
+            if (!is_array($recipient)) {
+                throw new \InvalidArgumentException(sprintf('Recipient at index %d must be an object', $index));
+            }
+            if (isset($recipient['attachments'])) {
+                throw new \InvalidArgumentException('Attachments are not supported for batch requests');
+            }
+            $metadata = $recipient['metadata'] ?? null;
+            if ($metadata !== null && !is_array($metadata)) {
+                throw new \InvalidArgumentException(sprintf('Recipient metadata at index %d must be an object', $index));
+            }
+            if ($metadata !== null && strlen(json_encode($metadata, JSON_THROW_ON_ERROR)) > self::MAX_METADATA_BYTES) {
+                throw new \InvalidArgumentException(sprintf('Recipient metadata at index %d is too large', $index));
+            }
+
+            $validatedRecipients[] = [
+                'to' => $this->email($recipient['to'] ?? null),
+                'metadata' => $metadata,
+            ];
+        }
+
+        return [...$common, 'recipients' => $validatedRecipients];
     }
 
     /** @param array<string, mixed> $payload */
@@ -123,5 +185,69 @@ final class EmailRequestValidator
         }
 
         return $value;
+    }
+
+    /**
+     * @return list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string}>
+     */
+    private function attachments(mixed $value): array
+    {
+        if (!is_array($value)) {
+            throw new \InvalidArgumentException('Attachments must be an array');
+        }
+
+        $maxCount = $this->env->int('EMAIL_ATTACHMENT_MAX_COUNT', 5);
+        $maxBytes = $this->env->int('EMAIL_ATTACHMENT_MAX_TOTAL_BYTES', 5_000_000);
+        if (count($value) > $maxCount) {
+            throw new \InvalidArgumentException(sprintf('Attachments cannot contain more than %d files', $maxCount));
+        }
+
+        $allowedTypes = array_filter(array_map(
+            'trim',
+            explode(',', $this->env->string('EMAIL_ATTACHMENT_ALLOWED_MIME_TYPES', 'image/png,application/pdf'))
+        ));
+        $totalBytes = 0;
+        $attachments = [];
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        foreach ($value as $index => $attachment) {
+            if (!is_array($attachment)) {
+                throw new \InvalidArgumentException(sprintf('Attachment at index %d must be an object', $index));
+            }
+
+            $filename = $this->requiredString($attachment['filename'] ?? null, 'attachment filename');
+            if (mb_strlen($filename) > 255 || basename($filename) !== $filename || preg_match('/[\x00-\x1F\x7F]/', $filename)) {
+                throw new \InvalidArgumentException(sprintf('Attachment filename at index %d is invalid', $index));
+            }
+
+            $encoded = $attachment['contentBase64'] ?? null;
+            if (!is_string($encoded) || $encoded === '') {
+                throw new \InvalidArgumentException(sprintf('Attachment contentBase64 at index %d is required', $index));
+            }
+            $content = base64_decode($encoded, true);
+            if ($content === false) {
+                throw new \InvalidArgumentException(sprintf('Attachment contentBase64 at index %d is invalid', $index));
+            }
+
+            $contentType = (string) $finfo->buffer($content);
+            if (!in_array($contentType, $allowedTypes, true)) {
+                throw new \InvalidArgumentException(sprintf('Attachment MIME type %s is not allowed', $contentType));
+            }
+
+            $sizeBytes = strlen($content);
+            $totalBytes += $sizeBytes;
+            if ($totalBytes > $maxBytes) {
+                throw new \InvalidArgumentException(sprintf('Attachments exceed the %d byte limit', $maxBytes));
+            }
+
+            $attachments[] = [
+                'filename' => $filename,
+                'contentType' => $contentType,
+                'content' => $content,
+                'sizeBytes' => $sizeBytes,
+                'sha256' => hash('sha256', $content),
+            ];
+        }
+
+        return $attachments;
     }
 }

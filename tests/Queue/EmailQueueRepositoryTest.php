@@ -129,6 +129,66 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
         $this->repository->insert([...$data, 'subject' => 'Different subject']);
     }
 
+    public function testAgedNormalEmailIsNotStarvedByRecentHighEmail(): void
+    {
+        $agedNormalId = $this->insertQueueRow([
+            'priority' => 'normal',
+            'created_at' => (new \DateTimeImmutable('-2 hours'))->format('Y-m-d H:i:s'),
+        ]);
+        $this->insertQueueRow([
+            'priority' => 'high',
+            'created_at' => (new \DateTimeImmutable())->format('Y-m-d H:i:s'),
+        ]);
+
+        $claimed = $this->repository->claimBatch(1, 300, 900);
+
+        self::assertSame($agedNormalId, $claimed[0]['id']);
+    }
+
+    public function testQueueCreditsPreferHigherWeightButStillServeOtherClient(): void
+    {
+        $this->pdo->exec("UPDATE email_clients SET queue_weight = 2 WHERE source_app = 'app-b'");
+        $appAId = $this->insertQueueRow([
+            'source_app' => 'app-a',
+            'created_at' => (new \DateTimeImmutable())->format('Y-m-d H:i:s'),
+        ]);
+        $appBId = $this->insertQueueRow([
+            'source_app' => 'app-b',
+            'created_at' => (new \DateTimeImmutable())->format('Y-m-d H:i:s'),
+        ]);
+
+        $first = $this->repository->claimBatch(1, 300, 900);
+        $second = $this->repository->claimBatch(1, 300, 900);
+
+        self::assertSame($appBId, $first[0]['id']);
+        self::assertSame($appAId, $second[0]['id']);
+    }
+
+    public function testBatchStoresSharedMessageAndCreatesQueueEvents(): void
+    {
+        $result = $this->repository->insertBatch([
+            'sourceApp' => 'app-a',
+            'idempotencyKey' => 'batch-1',
+            'subject' => 'Shared subject',
+            'html' => '<p>Shared body</p>',
+            'text' => 'Shared body',
+            'priority' => 'normal',
+            'metadata' => ['type' => 'newsletter'],
+            'recipients' => [
+                ['to' => 'one@deliverable.test', 'metadata' => null],
+                ['to' => 'two@deliverable.test', 'metadata' => ['userId' => 2]],
+            ],
+        ]);
+
+        self::assertCount(2, $result->emails);
+        self::assertSame(1, (int) $this->pdo->query('SELECT COUNT(*) FROM email_messages')->fetchColumn());
+        self::assertSame(2, (int) $this->pdo->query('SELECT COUNT(*) FROM email_events')->fetchColumn());
+
+        $claimed = $this->repository->claimBatch(1, 300, 900);
+        self::assertSame('Shared subject', $claimed[0]['resolved_subject']);
+        self::assertSame('<p>Shared body</p>', $claimed[0]['resolved_html_body']);
+    }
+
     /** @return array<string, mixed> */
     private function queueData(): array
     {

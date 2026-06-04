@@ -9,12 +9,48 @@ use PHPMailer\PHPMailer\PHPMailer;
 
 final class SmtpEmailProvider implements EmailProviderInterface
 {
+    private ?PHPMailer $mailer = null;
+
     public function __construct(private readonly Env $env)
     {
     }
 
     public function send(EmailMessage $message): EmailSendResult
     {
+        $mail = $this->mailer();
+        $mail->clearAllRecipients();
+        $mail->clearAttachments();
+        $mail->Subject = '';
+        $mail->Body = '';
+        $mail->AltBody = '';
+        $mail->MessageID = $this->messageId($message);
+        $mail->addAddress($message->to);
+        $mail->Subject = $message->subject;
+        $mail->Body = $message->html;
+        if ($message->text !== null) {
+            $mail->AltBody = $message->text;
+        }
+        foreach ($message->attachments as $attachment) {
+            $mail->addAttachment($attachment->path, $attachment->filename, PHPMailer::ENCODING_BASE64, $attachment->contentType);
+        }
+
+        try {
+            $mail->send();
+        } catch (\Throwable $exception) {
+            $mail->smtpClose();
+            $this->mailer = null;
+            throw $exception;
+        }
+
+        return new EmailSendResult($mail->getLastMessageID() ?: null);
+    }
+
+    private function mailer(): PHPMailer
+    {
+        if ($this->mailer !== null) {
+            return $this->mailer;
+        }
+
         $mail = new PHPMailer(true);
         $mail->SMTPDebug = $this->env->int('SMTP_DEBUG_LEVEL', 0);
         if ($mail->SMTPDebug > 0) {
@@ -29,9 +65,9 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $mail->Username = $this->env->string('SMTP_USER');
         $mail->Password = $this->env->string('SMTP_PASSWORD');
         $mail->Timeout = $this->env->int('SMTP_TIMEOUT_SECONDS', 30);
+        $mail->SMTPKeepAlive = true;
         $mail->Hostname = $this->messageIdDomain();
         $mail->Helo = $mail->Hostname;
-        $mail->MessageID = $this->messageId($message);
 
         $secure = strtolower($this->env->string('SMTP_SECURE', 'tls'));
         if ($secure === 'ssl') {
@@ -42,17 +78,9 @@ final class SmtpEmailProvider implements EmailProviderInterface
 
         $mail->CharSet = 'UTF-8';
         $mail->setFrom($this->env->string('SMTP_FROM_EMAIL'), $this->env->string('SMTP_FROM_NAME', ''));
-        $mail->addAddress($message->to);
-        $mail->Subject = $message->subject;
         $mail->isHTML(true);
-        $mail->Body = $message->html;
-        if ($message->text !== null) {
-            $mail->AltBody = $message->text;
-        }
 
-        $mail->send();
-
-        return new EmailSendResult($mail->getLastMessageID() ?: null);
+        return $this->mailer = $mail;
     }
 
     private function messageIdDomain(): string

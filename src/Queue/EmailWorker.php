@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CentralMailer\Queue;
 
+use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
+use CentralMailer\Email\EmailAttachment;
 use CentralMailer\Email\EmailMessage;
 use CentralMailer\Email\EmailProviderInterface;
 use Psr\Log\LoggerInterface;
@@ -16,23 +18,30 @@ final class EmailWorker
         private readonly EmailProviderInterface $provider,
         private readonly RateLimiter $rateLimiter,
         private readonly LoggerInterface $logger,
-        private readonly Env $env
+        private readonly Env $env,
+        private readonly AttachmentStorage $attachmentStorage
     ) {
     }
 
     public function runOnce(): void
     {
         $this->releaseStaleProcessing();
+        $this->cleanupTerminalAttachments();
 
         $batchSize = $this->env->int('EMAIL_WORKER_BATCH_SIZE', 20);
         $leaseSeconds = $this->processingTimeoutSeconds();
+        $priorityAgingSeconds = $this->env->int('EMAIL_PRIORITY_AGING_SECONDS', 900);
         for ($i = 0; $i < $batchSize; $i++) {
-            $emails = $this->repository->claimBatch(1, $leaseSeconds);
+            $emails = $this->repository->claimBatch(1, $leaseSeconds, $priorityAgingSeconds);
             if ($emails === []) {
                 return;
             }
 
-            if (!$this->rateLimiter->acquire()) {
+            if (!$this->rateLimiter->acquire(
+                (string) $emails[0]['source_app'],
+                $emails[0]['client_rate_limit_count'] === null ? null : (int) $emails[0]['client_rate_limit_count'],
+                $emails[0]['client_rate_limit_window_minutes'] === null ? null : (int) $emails[0]['client_rate_limit_window_minutes']
+            )) {
                 $this->repository->releaseClaim(
                     (string) $emails[0]['id'],
                     (string) $emails[0]['lease_id'],
@@ -61,15 +70,29 @@ final class EmailWorker
         ]);
 
         try {
+            $attachments = array_map(
+                fn (array $attachment): EmailAttachment => new EmailAttachment(
+                    $this->attachmentStorage->absolutePath((string) $attachment['storage_path']),
+                    (string) $attachment['filename'],
+                    (string) $attachment['content_type']
+                ),
+                $this->repository->findAttachments((string) $row['id'])
+            );
             $result = $this->provider->send(new EmailMessage(
                 $row['id'],
                 $row['recipient_email'],
-                $row['subject'],
-                $row['html_body'],
-                $row['text_body']
+                $row['resolved_subject'],
+                $row['resolved_html_body'],
+                $row['resolved_text_body'],
+                $attachments
             ));
 
-            $marked = $this->repository->markSent($row['id'], $row['lease_id'], $result->providerMessageId);
+            $marked = $this->repository->markSent(
+                $row['id'],
+                $row['lease_id'],
+                $result->providerMessageId,
+                ((int) $row['attempts']) + 1
+            );
             if (!$marked) {
                 $this->logger->critical('Email was accepted by provider after its processing lease was lost', [
                     'id' => $row['id'],
@@ -79,6 +102,7 @@ final class EmailWorker
 
                 return;
             }
+            $this->cleanupAttachments((string) $row['id']);
 
             $this->logger->info('Email sent', [
                 'id' => $row['id'],
@@ -96,7 +120,8 @@ final class EmailWorker
                 $attempts,
                 $maxAttempts,
                 $exception->getMessage(),
-                $nextAttemptAt
+                $nextAttemptAt,
+                $exception::class
             );
 
             if ($finalStatus === null) {
@@ -107,6 +132,9 @@ final class EmailWorker
                 ]);
 
                 return;
+            }
+            if ($finalStatus === 'failed') {
+                $this->cleanupAttachments((string) $row['id']);
             }
 
             $this->logger->warning('Email send failed', [
@@ -152,5 +180,25 @@ final class EmailWorker
             $this->env->int('EMAIL_PROCESSING_TIMEOUT_SECONDS', 300),
             $this->env->int('SMTP_TIMEOUT_SECONDS', 30) + 30
         );
+    }
+
+    private function cleanupTerminalAttachments(): void
+    {
+        foreach ($this->repository->findTerminalAttachmentEmailIds() as $emailId) {
+            $this->cleanupAttachments($emailId);
+        }
+    }
+
+    private function cleanupAttachments(string $emailId): void
+    {
+        try {
+            $this->attachmentStorage->delete($emailId);
+            $this->repository->markAttachmentsDeleted($emailId);
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Unable to clean up email attachments', [
+                'id' => $emailId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 }

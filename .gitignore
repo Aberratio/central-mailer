@@ -3,3 +3,5 @@
 /.phpunit.cache/
 /storage/logs/*.log
 /storage/logs/cron.log
+/storage/attachments/*
+!/storage/attachments/.gitkeep

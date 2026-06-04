@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CentralMailer\Queue;
 
+use CentralMailer\Support\Uuid;
 use PDO;
 
 final class RateLimitRepository
@@ -12,7 +13,14 @@ final class RateLimitRepository
     {
     }
 
-    public function tryReserve(int $limit, string $since): bool
+    public function tryReserve(
+        string $sourceApp,
+        int $limit,
+        string $since,
+        ?int $clientLimit,
+        string $clientSince,
+        string $cleanupSince
+    ): bool
     {
         if ($limit <= 0) {
             return false;
@@ -29,21 +37,43 @@ final class RateLimitRepository
                 throw new \RuntimeException('Rate limit lock row is missing');
             }
 
-            $delete = $this->pdo->prepare('DELETE FROM email_rate_limit_reservations WHERE reserved_at < :since');
-            $delete->execute(['since' => $since]);
+            $delete = $this->pdo->prepare('DELETE FROM email_rate_limit_reservations WHERE reserved_at < :cleanup_since');
+            $delete->execute(['cleanup_since' => $cleanupSince]);
 
-            $count = (int) $this->pdo->query('SELECT COUNT(*) FROM email_rate_limit_reservations')->fetchColumn();
+            $countStmt = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM email_rate_limit_reservations WHERE reserved_at >= :since'
+            );
+            $countStmt->execute(['since' => $since]);
+            $count = (int) $countStmt->fetchColumn();
             if ($count >= $limit) {
                 $this->pdo->commit();
 
                 return false;
             }
 
+            if ($clientLimit !== null) {
+                $clientCountStmt = $this->pdo->prepare(
+                    'SELECT COUNT(*) FROM email_rate_limit_reservations
+                     WHERE source_app = :source_app AND reserved_at >= :client_since'
+                );
+                $clientCountStmt->execute([
+                    'source_app' => $sourceApp,
+                    'client_since' => $clientSince,
+                ]);
+                if ((int) $clientCountStmt->fetchColumn() >= $clientLimit) {
+                    $this->pdo->commit();
+
+                    return false;
+                }
+            }
+
             $insert = $this->pdo->prepare(
-                'INSERT INTO email_rate_limit_reservations (id, reserved_at) VALUES (:id, :reserved_at)'
+                'INSERT INTO email_rate_limit_reservations (id, source_app, reserved_at)
+                 VALUES (:id, :source_app, :reserved_at)'
             );
             $insert->execute([
-                'id' => self::uuidV4(),
+                'id' => Uuid::v4(),
+                'source_app' => $sourceApp,
                 'reserved_at' => $now,
             ]);
             $this->pdo->commit();
@@ -63,12 +93,4 @@ final class RateLimitRepository
         return (new \DateTimeImmutable())->format('Y-m-d H:i:s');
     }
 
-    private static function uuidV4(): string
-    {
-        $bytes = random_bytes(16);
-        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
-        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
-
-        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
-    }
 }

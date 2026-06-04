@@ -36,6 +36,18 @@ final class EmailController
         return $this->json(['id' => $result->id, 'status' => $result->status], $result->created ? 201 : 200);
     }
 
+    public function batch(ServerRequestInterface $request): ResponseInterface
+    {
+        $payload = $this->payload($request);
+        $sourceApp = (string) $request->getAttribute('sourceApp');
+        $result = $this->queueService->enqueueBatch($sourceApp, $payload, $request->getHeaderLine('Idempotency-Key'));
+
+        return $this->json([
+            'id' => $result->id,
+            'emails' => $result->emails,
+        ], $result->created ? 201 : 200);
+    }
+
     /** @param array<string, string> $args */
     public function show(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
     {
@@ -57,7 +69,32 @@ final class EmailController
             'providerMessageId' => $row['provider_message_id'],
             'createdAt' => $row['created_at'],
             'sentAt' => $row['sent_at'],
+            'batchId' => $row['batch_id'],
         ]);
+    }
+
+    /** @param array<string, string> $args */
+    public function events(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $sourceApp = (string) $request->getAttribute('sourceApp');
+        if ($this->repository->findForSourceApp($args['id'], $sourceApp) === null) {
+            return $this->json(['error' => 'Email not found'], 404);
+        }
+
+        $events = array_map(static function (array $row): array {
+            return [
+                'type' => $row['event_type'],
+                'status' => $row['status'],
+                'attempt' => (int) $row['attempt'],
+                'errorCode' => $row['error_code'],
+                'errorMessage' => $row['error_message'],
+                'providerMessageId' => $row['provider_message_id'],
+                'details' => $row['details'] === null ? null : json_decode($row['details'], true, flags: JSON_THROW_ON_ERROR),
+                'createdAt' => $row['created_at'],
+            ];
+        }, $this->repository->findEventsForSourceApp($args['id'], $sourceApp));
+
+        return $this->json(['id' => $args['id'], 'events' => $events]);
     }
 
     /** @return array<string, mixed> */
