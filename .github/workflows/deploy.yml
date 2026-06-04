@@ -50,10 +50,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@27853eb8b46dc01c33bf9fef67d98df2683c3be2 # 2.34.0
         with:
           php-version: "8.2"
           extensions: fileinfo, json, mbstring, pdo_mysql, zlib
@@ -64,6 +64,7 @@ jobs:
           set -Eeuo pipefail
           composer validate --no-check-publish
           composer install --prefer-dist --no-interaction
+          composer audit --locked
           find bin public src scripts -name '*.php' -print0 | xargs -0 -n1 php -l
           php scripts/run-tests.php
           composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
@@ -127,20 +128,25 @@ jobs:
           BACKEND_REMOTE_DIR: ${{ secrets.BACKEND_REMOTE_DIR }}
           BACKEND_ALLOWED_ROOT: ${{ secrets.BACKEND_ALLOWED_ROOT }}
           BACKEND_BACKUP_DIR: ${{ secrets.BACKEND_BACKUP_DIR }}
+          API_URL: ${{ secrets.API_URL }}
         run: |
           set -Eeuo pipefail
           if [ "$TARGET_ENV" = "production" ] && [ "$CONFIRM_PRODUCTION" != "DEPLOY_PRODUCTION" ]; then
             echo "Production deploy requires confirm_production=DEPLOY_PRODUCTION."
             exit 50
           fi
-          if [ -z "$SSH_USER" ] || [ -z "$BACKEND_REMOTE_DIR" ] || [ -z "$BACKEND_ALLOWED_ROOT" ] || [ -z "$BACKEND_BACKUP_DIR" ]; then
-            echo "SSH_USER, BACKEND_REMOTE_DIR, BACKEND_ALLOWED_ROOT and BACKEND_BACKUP_DIR are required."
+          if [ "$TARGET_ENV" = "production" ] && [ "$MIGRATION_MODE" = "skip" ]; then
+            echo "Production deploy cannot skip migrations."
+            exit 52
+          fi
+          if [ -z "$SSH_USER" ] || [ -z "$BACKEND_REMOTE_DIR" ] || [ -z "$BACKEND_ALLOWED_ROOT" ] || [ -z "$BACKEND_BACKUP_DIR" ] || [ -z "$API_URL" ]; then
+            echo "SSH_USER, BACKEND_REMOTE_DIR, BACKEND_ALLOWED_ROOT, BACKEND_BACKUP_DIR and API_URL are required."
             exit 51
           fi
 
           DEPLOY_ID="${TARGET_ENV}-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
           REMOTE_ZIP="$BACKEND_REMOTE_DIR/.deploy/api-${DEPLOY_ID}.zip"
-          printf -v REMOTE_ENV 'BACKEND_REMOTE_DIR=%q BACKEND_ALLOWED_ROOT=%q BACKEND_BACKUP_DIR=%q REMOTE_ZIP=%q TARGET_ENV=%q MIGRATION_MODE=%q DEPLOY_ID=%q' "$BACKEND_REMOTE_DIR" "$BACKEND_ALLOWED_ROOT" "$BACKEND_BACKUP_DIR" "$REMOTE_ZIP" "$TARGET_ENV" "$MIGRATION_MODE" "$DEPLOY_ID"
+          printf -v REMOTE_ENV 'BACKEND_REMOTE_DIR=%q BACKEND_ALLOWED_ROOT=%q BACKEND_BACKUP_DIR=%q REMOTE_ZIP=%q TARGET_ENV=%q MIGRATION_MODE=%q DEPLOY_ID=%q API_URL=%q' "$BACKEND_REMOTE_DIR" "$BACKEND_ALLOWED_ROOT" "$BACKEND_BACKUP_DIR" "$REMOTE_ZIP" "$TARGET_ENV" "$MIGRATION_MODE" "$DEPLOY_ID" "$API_URL"
 
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$REMOTE_ENV bash -s" <<'REMOTE'
           set -Eeuo pipefail
@@ -194,6 +200,9 @@ jobs:
           command -v rsync >/dev/null
           command -v unzip >/dev/null
           command -v mysqldump >/dev/null
+          command -v curl >/dev/null
+          command -v openssl >/dev/null
+          command -v mv >/dev/null
 
           BACKEND_REMOTE_DIR_REAL="$(realpath -e "$BACKEND_REMOTE_DIR")"
           BACKEND_ALLOWED_ROOT_REAL="$(realpath -e "$BACKEND_ALLOWED_ROOT")"
@@ -287,6 +296,11 @@ jobs:
           DB_PASSWORD="$(get_env DB_PASSWORD)"
           APP_ENV="$(get_env APP_ENV)"
           LOG_DIR="$(get_env LOG_DIR)"
+          BACKUP_RETENTION_DAYS="$(get_env BACKUP_RETENTION_DAYS)"
+          BACKUP_ENCRYPTION_KEY="$(get_env BACKUP_ENCRYPTION_KEY)"
+          if [ -z "$BACKUP_RETENTION_DAYS" ]; then
+            BACKUP_RETENTION_DAYS=30
+          fi
           if [ -z "$LOG_DIR" ]; then
             LOG_DIR="$BACKEND_REMOTE_DIR_REAL/storage/logs"
           fi
@@ -326,6 +340,17 @@ jobs:
             echo "DB_PASSWORD is empty; refusing production deploy."
             exit 26
           fi
+          if [ ${#BACKUP_ENCRYPTION_KEY} -lt 32 ]; then
+            echo "BACKUP_ENCRYPTION_KEY must contain at least 32 characters."
+            exit 39
+          fi
+
+          case "$BACKUP_RETENTION_DAYS" in
+            ''|*[!0-9]*)
+              echo "BACKUP_RETENTION_DAYS must be a positive integer."
+              exit 38
+              ;;
+          esac
 
           MYSQL_CNF="$(mktemp)"
           trap 'rm -f "$MYSQL_CNF"' EXIT
@@ -339,15 +364,21 @@ jobs:
           default-character-set=utf8mb4
           MYSQLCNF
 
-          BACKUP_FILE="$BACKEND_BACKUP_DIR_REAL/predeploy-$TARGET_ENV-$(date +%Y%m%d-%H%M%S).sql.gz"
-          mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers "$DB_DATABASE" | gzip -c > "$BACKUP_FILE"
+          export BACKUP_ENCRYPTION_KEY
+          BACKUP_FILE="$BACKEND_BACKUP_DIR_REAL/predeploy-$TARGET_ENV-$(date +%Y%m%d-%H%M%S).sql.gz.enc"
+          mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers "$DB_DATABASE" \
+            | gzip -c \
+            | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_ENCRYPTION_KEY \
+            > "$BACKUP_FILE"
           chmod 600 "$BACKUP_FILE"
-          echo "Database backup created: $BACKUP_FILE"
+          echo "Encrypted database backup created: $BACKUP_FILE"
 
-          if ! gzip -t "$BACKUP_FILE"; then
+          if ! openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in "$BACKUP_FILE" | gzip -t; then
             echo "Database backup is invalid: $BACKUP_FILE"
             exit 21
           fi
+
+          find "$BACKEND_BACKUP_DIR_REAL" -maxdepth 1 -type f -name 'predeploy-*.sql.gz.enc' -mtime "+$BACKUP_RETENTION_DAYS" -delete
 
           if [ "$MIGRATION_MODE" = "dry-run" ] || [ "$MIGRATION_MODE" = "baseline" ]; then
             CHECK_DIR="$(mktemp -d "$BACKEND_REMOTE_DIR_REAL/.deploy/check-${DEPLOY_ID}.XXXXXX")"
@@ -361,12 +392,13 @@ jobs:
 
             unzip -o -q "$REMOTE_ZIP" -d "$CHECK_DIR"
             cp "$ENV_FILE" "$CHECK_DIR/.env"
+            php "$CHECK_DIR/scripts/validate-config.php"
 
             if [ "$MIGRATION_MODE" = "dry-run" ]; then
               php "$CHECK_DIR/scripts/run-migrations.php" --dry-run
               echo "Migration dry-run finished. API files were not changed."
             else
-              php "$CHECK_DIR/scripts/run-migrations.php" --baseline
+              php "$CHECK_DIR/scripts/run-migrations.php" --baseline --baseline-through=004_add_technical_priority.sql
               echo "Migration baseline finished. API files were not changed."
             fi
 
@@ -374,10 +406,20 @@ jobs:
             exit 0
           fi
 
-          unzip -o -q "$REMOTE_ZIP" -d "$BACKEND_REMOTE_DIR_REAL"
+          RELEASES_DIR="$BACKEND_REMOTE_DIR_REAL/releases"
+          RELEASE_DIR="$RELEASES_DIR/$DEPLOY_ID"
+          mkdir -p "$RELEASES_DIR" "$BACKEND_REMOTE_DIR_REAL/storage/logs" "$BACKEND_REMOTE_DIR_REAL/storage/attachments" "$BACKEND_REMOTE_DIR_REAL/.well-known"
+          unzip -o -q "$REMOTE_ZIP" -d "$RELEASE_DIR"
           rm -f "$REMOTE_ZIP"
+          cp "$ENV_FILE" "$RELEASE_DIR/.env"
+          chmod 600 "$RELEASE_DIR/.env"
+          rm -rf -- "$RELEASE_DIR/storage/logs" "$RELEASE_DIR/storage/attachments"
+          ln -s "$BACKEND_REMOTE_DIR_REAL/storage/logs" "$RELEASE_DIR/storage/logs"
+          ln -s "$BACKEND_REMOTE_DIR_REAL/storage/attachments" "$RELEASE_DIR/storage/attachments"
+          rm -rf -- "$RELEASE_DIR/public/.well-known"
+          ln -s "$BACKEND_REMOTE_DIR_REAL/.well-known" "$RELEASE_DIR/public/.well-known"
 
-          PUBLIC_DIR="$BACKEND_REMOTE_DIR_REAL/public"
+          PUBLIC_DIR="$RELEASE_DIR/public"
           PUBLIC_HTML="$BACKEND_REMOTE_DIR_REAL/public_html"
 
           if [ ! -f "$PUBLIC_DIR/index.php" ] || [ ! -f "$PUBLIC_DIR/.htaccess" ]; then
@@ -385,26 +427,16 @@ jobs:
             exit 28
           fi
 
-          if [ ! -d "$PUBLIC_HTML" ]; then
-            echo "Missing public_html directory: $PUBLIC_HTML"
+          if [ -e "$PUBLIC_HTML" ] && [ ! -L "$PUBLIC_HTML" ]; then
+            echo "public_html must be a symlink managed by the deployment workflow: $PUBLIC_HTML"
             exit 29
           fi
 
-          PUBLIC_HTML_REAL="$(realpath -e "$PUBLIC_HTML")"
-          case "$PUBLIC_HTML_REAL/" in
-            "$BACKEND_REMOTE_DIR_REAL"/*) ;;
-            *)
-              echo "public_html must resolve inside BACKEND_REMOTE_DIR."
-              exit 37
-              ;;
-          esac
-
-          rsync -a --delete --exclude='.well-known/' "$PUBLIC_DIR/" "$PUBLIC_HTML_REAL/"
-          echo "Published API public directory to $PUBLIC_HTML_REAL"
+          php "$RELEASE_DIR/scripts/validate-config.php"
 
           case "$MIGRATION_MODE" in
             run)
-              php "$BACKEND_REMOTE_DIR_REAL/scripts/run-migrations.php"
+              php "$RELEASE_DIR/scripts/run-migrations.php"
               ;;
             skip)
               echo "Migrations skipped by workflow input."
@@ -419,7 +451,27 @@ jobs:
               ;;
           esac
 
-          echo "API unpacked into $BACKEND_REMOTE_DIR_REAL"
+          PREVIOUS_RELEASE="$(readlink "$BACKEND_REMOTE_DIR_REAL/current" || true)"
+          ln -s "$RELEASE_DIR" "$BACKEND_REMOTE_DIR_REAL/.deploy/current-$DEPLOY_ID"
+          mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/current-$DEPLOY_ID" "$BACKEND_REMOTE_DIR_REAL/current"
+          ln -s "$RELEASE_DIR/public" "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID"
+          mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID" "$PUBLIC_HTML"
+
+          if ! curl --fail --show-error --location "${API_URL%/}/health"; then
+            if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+              ln -s "$PREVIOUS_RELEASE" "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-current-$DEPLOY_ID"
+              mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-current-$DEPLOY_ID" "$BACKEND_REMOTE_DIR_REAL/current"
+              ln -s "$PREVIOUS_RELEASE/public" "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-public-$DEPLOY_ID"
+              mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-public-$DEPLOY_ID" "$PUBLIC_HTML"
+            else
+              rm -f -- "$BACKEND_REMOTE_DIR_REAL/current" "$PUBLIC_HTML"
+            fi
+            echo "Health check failed; application symlinks were rolled back."
+            exit 39
+          fi
+
+          find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -path "$RELEASE_DIR" -mtime +14 -exec rm -rf -- {} +
+          echo "Activated API release $RELEASE_DIR"
           REMOTE
 
       - name: Health check

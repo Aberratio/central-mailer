@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Logging;
 
 use CentralMailer\Config\Env;
-use Monolog\Handler\StreamHandler;
+use Monolog\Handler\RotatingFileHandler;
 use Monolog\Level;
 use Monolog\Logger;
 
@@ -15,7 +15,11 @@ final class LoggerFactory
     {
         $level = Level::fromName(strtoupper($env->string('LOG_LEVEL', 'info')));
         $logger = new Logger('central-mailer');
-        $logger->pushHandler(new StreamHandler($path, $level));
+        $logger->pushHandler(new RotatingFileHandler(
+            $path,
+            max(1, $env->int('LOG_MAX_FILES', 30)),
+            $level
+        ));
 
         return $logger;
     }

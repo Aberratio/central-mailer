@@ -54,6 +54,30 @@ final class ClientRepository
         $now = self::now();
 
         foreach ($env->apiKeys() as $sourceApp => $apiKey) {
+            $apiKeyHash = hash('sha256', $apiKey);
+            $existing = $this->pdo->prepare(
+                'SELECT api_key_hash FROM email_clients WHERE source_app = :source_app'
+            );
+            $existing->execute(['source_app' => $sourceApp]);
+            $existingHash = $existing->fetchColumn();
+
+            if ($existingHash !== false) {
+                if (!hash_equals((string) $existingHash, $apiKeyHash)) {
+                    $update = $this->pdo->prepare(
+                        'UPDATE email_clients
+                         SET api_key_hash = :api_key_hash, updated_at = :updated_at
+                         WHERE source_app = :source_app'
+                    );
+                    $update->execute([
+                        'source_app' => $sourceApp,
+                        'api_key_hash' => $apiKeyHash,
+                        'updated_at' => $now,
+                    ]);
+                }
+
+                continue;
+            }
+
             try {
                 $stmt = $this->pdo->prepare(
                     'INSERT INTO email_clients
@@ -63,7 +87,7 @@ final class ClientRepository
                 );
                 $stmt->execute([
                     'source_app' => $sourceApp,
-                    'api_key_hash' => hash('sha256', $apiKey),
+                    'api_key_hash' => $apiKeyHash,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);

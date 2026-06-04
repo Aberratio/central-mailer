@@ -76,6 +76,8 @@ final class SmtpEmailProvider implements EmailProviderInterface
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
         } elseif ($secure === 'tls') {
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        } else {
+            throw new \RuntimeException('SMTP_SECURE must be tls or ssl');
         }
 
         $mail->CharSet = 'UTF-8';

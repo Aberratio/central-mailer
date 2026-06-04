@@ -21,6 +21,14 @@ final class EmailQueueRepository
         $now = self::now();
         $metadata = $data['metadata'] === null ? null : json_encode($data['metadata'], JSON_THROW_ON_ERROR);
         $requestHash = self::requestHash($data, $metadata);
+        $existing = $this->findByIdempotencyKey((string) $data['sourceApp'], $data['idempotencyKey']);
+        if ($existing !== null) {
+            if (!hash_equals((string) $existing['request_hash'], $requestHash)) {
+                throw new IdempotencyConflictException('Idempotency-Key was already used for a different email');
+            }
+
+            return new EnqueueResult((string) $existing['id'], (string) $existing['status'], false);
+        }
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
@@ -31,6 +39,14 @@ final class EmailQueueRepository
 
         $this->pdo->beginTransaction();
         try {
+            $this->assertCapacity(
+                (string) $data['sourceApp'],
+                1,
+                array_sum(array_column($data['attachments'] ?? [], 'sizeBytes')),
+                (int) ($data['maxQueuedEmailsPerClient'] ?? 10_000),
+                (int) ($data['maxActiveAttachmentBytesPerClient'] ?? 100_000_000),
+                true
+            );
             $stmt->execute([
                 'id' => $id,
                 'source_app' => $data['sourceApp'],
@@ -81,9 +97,25 @@ final class EmailQueueRepository
         $now = self::now();
         $messageMetadata = $data['metadata'] === null ? null : json_encode($data['metadata'], JSON_THROW_ON_ERROR);
         $requestHash = self::batchRequestHash($data, $messageMetadata);
+        $existing = $this->findBatchByIdempotencyKey((string) $data['sourceApp'], $data['idempotencyKey']);
+        if ($existing !== null) {
+            if (!hash_equals((string) $existing['request_hash'], $requestHash)) {
+                throw new IdempotencyConflictException('Idempotency-Key was already used for a different batch');
+            }
+
+            return new BatchEnqueueResult((string) $existing['id'], $this->findBatchEmails((string) $existing['id']), false);
+        }
 
         $this->pdo->beginTransaction();
         try {
+            $this->assertCapacity(
+                (string) $data['sourceApp'],
+                count($data['recipients']),
+                0,
+                (int) ($data['maxQueuedEmailsPerClient'] ?? 10_000),
+                (int) ($data['maxActiveAttachmentBytesPerClient'] ?? 100_000_000),
+                true
+            );
             $messageStmt = $this->pdo->prepare(
                 'INSERT INTO email_messages
                  (id, source_app, subject, html_body, text_body, metadata, created_at)
@@ -184,6 +216,23 @@ final class EmailQueueRepository
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;
+    }
+
+    public function assertCanEnqueue(
+        string $sourceApp,
+        int $emailCount,
+        int $attachmentBytes,
+        int $maxQueuedEmails,
+        int $maxActiveAttachmentBytes
+    ): void {
+        $this->assertCapacity(
+            $sourceApp,
+            $emailCount,
+            $attachmentBytes,
+            $maxQueuedEmails,
+            $maxActiveAttachmentBytes,
+            false
+        );
     }
 
     /** @return list<array<string, mixed>> */
@@ -661,6 +710,50 @@ final class EmailQueueRepository
              END
              WHERE active = 1'
         );
+    }
+
+    private function assertCapacity(
+        string $sourceApp,
+        int $emailCount,
+        int $attachmentBytes,
+        int $maxQueuedEmails,
+        int $maxActiveAttachmentBytes,
+        bool $lockClient
+    ): void {
+        if ($lockClient) {
+            $lockClause = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' ? '' : ' FOR UPDATE';
+            $lock = $this->pdo->prepare(
+                'SELECT source_app FROM email_clients WHERE source_app = :source_app' . $lockClause
+            );
+            $lock->execute(['source_app' => $sourceApp]);
+            if ($lock->fetchColumn() === false) {
+                throw new QueueCapacityExceededException('Email client is not active');
+            }
+        }
+
+        $queued = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM email_queue
+             WHERE source_app = :source_app AND status IN ("pending", "processing", "retry")'
+        );
+        $queued->execute(['source_app' => $sourceApp]);
+        if ((int) $queued->fetchColumn() + $emailCount > $maxQueuedEmails) {
+            throw new QueueCapacityExceededException('Email queue capacity for this client has been reached');
+        }
+
+        if ($attachmentBytes <= 0) {
+            return;
+        }
+
+        $attachments = $this->pdo->prepare(
+            'SELECT COALESCE(SUM(a.size_bytes), 0)
+             FROM email_attachments a
+             INNER JOIN email_queue q ON q.id = a.email_id
+             WHERE q.source_app = :source_app AND a.deleted_at IS NULL'
+        );
+        $attachments->execute(['source_app' => $sourceApp]);
+        if ((int) $attachments->fetchColumn() + $attachmentBytes > $maxActiveAttachmentBytes) {
+            throw new QueueCapacityExceededException('Active attachment storage capacity for this client has been reached');
+        }
     }
 
     /** @param list<array{id: string, status: string, source_app: string}> $claimed */

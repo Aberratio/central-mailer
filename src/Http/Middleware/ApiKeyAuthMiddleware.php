@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Http\Middleware;
 
 use CentralMailer\Client\ClientRepository;
+use CentralMailer\Config\Env;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
@@ -13,7 +14,7 @@ use Slim\Psr7\Response;
 
 final class ApiKeyAuthMiddleware implements MiddlewareInterface
 {
-    public function __construct(private readonly ClientRepository $clients)
+    public function __construct(private readonly ClientRepository $clients, private readonly ?Env $env = null)
     {
     }
 
@@ -21,7 +22,12 @@ final class ApiKeyAuthMiddleware implements MiddlewareInterface
     {
         $path = $request->getUri()->getPath();
 
-        if ($request->getMethod() === 'OPTIONS' || in_array($path, ['/docs', '/openapi.json', '/health'], true)) {
+        $publicDocs = $this->env?->bool('APP_DOCS_PUBLIC', false) ?? false;
+        if (
+            $request->getMethod() === 'OPTIONS'
+            || $path === '/health'
+            || ($publicDocs && in_array($path, ['/docs', '/openapi.json'], true))
+        ) {
             return $handler->handle($request);
         }
 

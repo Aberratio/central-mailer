@@ -6,6 +6,7 @@ namespace CentralMailer\Http;
 
 use CentralMailer\Config\Env;
 use CentralMailer\Queue\IdempotencyConflictException;
+use CentralMailer\Queue\QueueCapacityExceededException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 use Slim\App;
@@ -18,7 +19,7 @@ final class ErrorMiddleware
     {
         $middleware = $app->addErrorMiddleware($env->bool('APP_DEBUG', false), true, true, $logger);
         $middleware->setDefaultErrorHandler(
-            function ($request, \Throwable $exception, bool $displayErrorDetails) use ($logger): ResponseInterface {
+            function ($request, \Throwable $exception, bool $displayErrorDetails) use ($env, $logger): ResponseInterface {
                 $logger->error('HTTP error', [
                     'message' => $exception->getMessage(),
                     'path' => (string) $request->getUri()->getPath(),
@@ -26,6 +27,7 @@ final class ErrorMiddleware
 
                 $statusCode = match (true) {
                     $exception instanceof IdempotencyConflictException => 409,
+                    $exception instanceof QueueCapacityExceededException => 429,
                     $exception instanceof \InvalidArgumentException => 400,
                     default => 500,
                 };
@@ -38,7 +40,18 @@ final class ErrorMiddleware
                 $response = new Response($statusCode);
                 $response->getBody()->write(json_encode($payload, JSON_THROW_ON_ERROR));
 
-                return $response->withHeader('Content-Type', 'application/json');
+                $response = $response
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withHeader('X-Content-Type-Options', 'nosniff')
+                    ->withHeader('Referrer-Policy', 'no-referrer')
+                    ->withHeader('X-Frame-Options', 'DENY')
+                    ->withHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+
+                if (strtolower($env->string('APP_ENV', 'local')) === 'production') {
+                    $response = $response->withHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+                }
+
+                return $response;
             }
         );
 

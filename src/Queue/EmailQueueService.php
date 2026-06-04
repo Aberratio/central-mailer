@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Queue;
 
 use CentralMailer\Attachment\AttachmentStorage;
+use CentralMailer\Config\Env;
 use CentralMailer\Support\Uuid;
 use CentralMailer\Validation\EmailRequestValidator;
 use Psr\Log\LoggerInterface;
@@ -15,7 +16,8 @@ final class EmailQueueService
         private readonly EmailQueueRepository $repository,
         private readonly EmailRequestValidator $validator,
         private readonly LoggerInterface $logger,
-        private readonly AttachmentStorage $attachmentStorage
+        private readonly AttachmentStorage $attachmentStorage,
+        private readonly ?Env $env = null
     ) {
     }
 
@@ -24,6 +26,16 @@ final class EmailQueueService
     {
         $validated = $this->validator->validateQueuePayload($payload);
         $idempotencyKey = $this->validateIdempotencyKey($idempotencyKey);
+        if ($idempotencyKey === null) {
+            $attachmentBytes = array_sum(array_column($validated['attachments'], 'sizeBytes'));
+            $this->repository->assertCanEnqueue(
+                $sourceApp,
+                1,
+                $attachmentBytes,
+                $this->maxQueuedEmailsPerClient(),
+                $this->maxActiveAttachmentBytesPerClient()
+            );
+        }
         $id = Uuid::v4();
         $attachments = $this->attachmentStorage->store($id, $validated['attachments']);
         try {
@@ -33,6 +45,8 @@ final class EmailQueueService
                 'attachments' => $attachments,
                 'sourceApp' => $sourceApp,
                 'idempotencyKey' => $idempotencyKey,
+                'maxQueuedEmailsPerClient' => $this->maxQueuedEmailsPerClient(),
+                'maxActiveAttachmentBytesPerClient' => $this->maxActiveAttachmentBytesPerClient(),
             ]);
         } catch (\Throwable $exception) {
             $this->attachmentStorage->delete($id);
@@ -58,10 +72,21 @@ final class EmailQueueService
     {
         $validated = $this->validator->validateBatchPayload($payload);
         $idempotencyKey = $this->validateIdempotencyKey($idempotencyKey);
+        if ($idempotencyKey === null) {
+            $this->repository->assertCanEnqueue(
+                $sourceApp,
+                count($validated['recipients']),
+                0,
+                $this->maxQueuedEmailsPerClient(),
+                $this->maxActiveAttachmentBytesPerClient()
+            );
+        }
         $result = $this->repository->insertBatch([
             ...$validated,
             'sourceApp' => $sourceApp,
             'idempotencyKey' => $idempotencyKey,
+            'maxQueuedEmailsPerClient' => $this->maxQueuedEmailsPerClient(),
+            'maxActiveAttachmentBytesPerClient' => $this->maxActiveAttachmentBytesPerClient(),
         ]);
 
         $this->logger->info($result->created ? 'Email batch queued' : 'Email batch enqueue replayed', [
@@ -85,5 +110,15 @@ final class EmailQueueService
         }
 
         return $idempotencyKey;
+    }
+
+    private function maxQueuedEmailsPerClient(): int
+    {
+        return max(1, $this->env?->int('EMAIL_MAX_QUEUED_PER_CLIENT', 10_000) ?? 10_000);
+    }
+
+    private function maxActiveAttachmentBytesPerClient(): int
+    {
+        return max(0, $this->env?->int('EMAIL_MAX_ACTIVE_ATTACHMENT_BYTES_PER_CLIENT', 100_000_000) ?? 100_000_000);
     }
 }

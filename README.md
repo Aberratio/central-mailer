@@ -17,7 +17,7 @@ Stack: PHP 8.2+, Slim Framework, MySQL/MariaDB, PHPMailer, vlucas/phpdotenv, Mon
 
 ```bash
 composer install
-cp .env.example .env
+cp .example.env .env
 ```
 
 Set the correct values in `.env`: database access, API keys, SMTP settings, and sending limits.
@@ -31,6 +31,9 @@ APP_ENV=local
 APP_DEBUG=true
 APP_URL=http://localhost:8080
 APP_CORS_ORIGIN=*
+APP_MAX_REQUEST_BODY_BYTES=12000000
+APP_DOCS_ENABLED=true
+APP_DOCS_PUBLIC=true
 
 DB_HOST=127.0.0.1
 DB_PORT=3306
@@ -59,6 +62,9 @@ TECHNICAL_EMAIL_FALLBACK_TO_STANDARD=true
 EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
 EMAIL_RATE_LIMIT_RESERVATION_RETENTION_MINUTES=10080
+EMAIL_ENQUEUE_RATE_LIMIT_COUNT=60
+EMAIL_ENQUEUE_RATE_LIMIT_WINDOW_MINUTES=1
+EMAIL_ENQUEUE_RATE_LIMIT_RETENTION_MINUTES=1440
 EMAIL_WORKER_BATCH_SIZE=20
 EMAIL_WORKER_SLEEP_SECONDS=10
 EMAIL_PRIORITY_AGING_SECONDS=900
@@ -66,19 +72,36 @@ EMAIL_BATCH_MAX_RECIPIENTS=1000
 EMAIL_ATTACHMENT_MAX_COUNT=5
 EMAIL_ATTACHMENT_MAX_TOTAL_BYTES=5000000
 EMAIL_ATTACHMENT_ALLOWED_MIME_TYPES=image/png,application/pdf
+EMAIL_MAX_QUEUED_PER_CLIENT=10000
+EMAIL_MAX_ACTIVE_ATTACHMENT_BYTES_PER_CLIENT=100000000
+EMAIL_DATA_RETENTION_DAYS=90
+
+BACKUP_RETENTION_DAYS=30
+BACKUP_ENCRYPTION_KEY=replace-with-at-least-32-random-characters
 
 LOG_LEVEL=info
 LOG_DIR=
+LOG_MAX_FILES=30
 ```
 
 Leave `LOG_DIR` empty to use `storage/logs`. On a deployed server, set it only to an absolute path.
+Logs rotate daily and retain `LOG_MAX_FILES` files.
 
-On startup, legacy `.env` keys are inserted into `email_clients` only if the corresponding client does not exist:
+On startup, legacy `.env` keys are inserted into `email_clients`, and an existing matching client key is rotated
+when its configured value changes:
 
 - `API_KEY_APP_A` -> `app-a`
 - `API_KEY_APP_B` -> `app-b`
 
-The database table `email_clients` is the source of truth for authentication, activation, queue weights, and optional per-client rate limits. The backend does not trust the `sourceApp` field from the request body.
+The database table `email_clients` is the source of truth for authentication, activation, queue weights, and optional per-client sending rate limits. The backend does not trust the `sourceApp` field from the request body.
+
+For production, set `APP_DEBUG=false`, use an HTTPS `APP_URL`, configure explicit CORS origins, set
+`APP_DOCS_ENABLED=false`, `APP_DOCS_PUBLIC=false`, and keep `SMTP_DEBUG_LEVEL=0`. Configured legacy API keys
+and `BACKUP_ENCRYPTION_KEY` must contain at least 32 characters. Validate the environment before starting or deploying:
+
+```bash
+php scripts/validate-config.php
+```
 
 ## Database and migration
 
@@ -112,16 +135,24 @@ Then enable the technical priority:
 mysql -u root -p central_mailer < database/migrations/004_add_technical_priority.sql
 ```
 
+Then add API enqueue rate limiting:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/005_add_enqueue_rate_limit.sql
+```
+
 The deploy workflow uses the migration runner instead of invoking SQL files manually:
 
 ```bash
 php scripts/run-migrations.php
 php scripts/run-migrations.php --dry-run
 php scripts/run-migrations.php --baseline
+php scripts/run-migrations.php --baseline --baseline-through=004_add_technical_priority.sql
 ```
 
 Use `--baseline` once for an existing database that already has the current schema but does not have the
-`schema_migrations` table. Use the normal command for a new empty database and for later deployments.
+`schema_migrations` table. Use `--baseline-through` when the database has an older known schema and newer migration
+files must still be executed normally. Use the normal command for a new empty database and for later deployments.
 
 Example client configuration:
 
@@ -133,6 +164,9 @@ VALUES
 ```
 
 Rotate a key by updating `api_key_hash`. A larger `queue_weight` gives the client a larger share of available sending capacity.
+
+`EMAIL_ENQUEUE_RATE_LIMIT_*` limits accepted POST requests per client. `EMAIL_MAX_QUEUED_PER_CLIENT` limits
+non-terminal messages per client, and `EMAIL_MAX_ACTIVE_ATTACHMENT_BYTES_PER_CLIENT` limits active attachment storage.
 
 ## Local run
 
@@ -284,6 +318,12 @@ An application can read only its own messages. The `app-a` API key will not see 
 
 Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and provider acceptance.
 
+Run retention cleanup periodically after attachments have been cleaned by workers:
+
+```cron
+15 2 * * * cd /path/to/central-mailer && /usr/bin/php scripts/cleanup-retention.php >> storage/logs/retention.log 2>&1
+```
+
 ## Message statuses
 
 - `pending` - the message is waiting in the queue.
@@ -333,9 +373,9 @@ Each `email_clients` row can also define `rate_limit_count` and `rate_limit_wind
 
 Logs are written to:
 
-- `storage/logs/app.log`
-- `storage/logs/worker.log`
-- `storage/logs/technical-worker.log`
+- `storage/logs/app-YYYY-MM-DD.log`
+- `storage/logs/worker-YYYY-MM-DD.log`
+- `storage/logs/technical-worker-YYYY-MM-DD.log`
 
 Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, and rate limiting. Persistent event history is stored in `email_events`. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
 
@@ -367,8 +407,8 @@ The simplest cron variant starts the worker periodically. Because the current wo
 process, use `timeout` to stop it before the next minute and `flock` to prevent overlapping workers:
 
 ```cron
-* * * * * cd /path/to/central-mailer-smtp && flock -n storage/worker.lock timeout 55 /usr/bin/php bin/worker.php >> storage/logs/cron.log 2>&1
-* * * * * cd /path/to/central-mailer-smtp && flock -n storage/technical-worker.lock timeout 55 /usr/bin/php bin/technical-worker.php >> storage/logs/technical-cron.log 2>&1
+* * * * * cd /path/to/central-mailer-smtp/current && flock -n ../storage/worker.lock timeout 55 /usr/bin/php bin/worker.php >> ../storage/logs/cron.log 2>&1
+* * * * * cd /path/to/central-mailer-smtp/current && flock -n ../storage/technical-worker.lock timeout 55 /usr/bin/php bin/technical-worker.php >> ../storage/logs/technical-cron.log 2>&1
 ```
 
 On shared hosting, replace `/usr/bin/php` with the PHP CLI path provided by the host, for example
@@ -384,10 +424,11 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/path/to/central-mailer-smtp
+WorkingDirectory=/path/to/central-mailer-smtp/current
 ExecStart=/usr/bin/php bin/worker.php
 Restart=always
 RestartSec=5
+RuntimeMaxSec=60
 User=www-data
 Group=www-data
 
@@ -403,7 +444,8 @@ sudo systemctl enable central-mailer-worker
 sudo systemctl start central-mailer-worker
 ```
 
-Create a second service with `ExecStart=/usr/bin/php bin/technical-worker.php` and a distinct unit name such as `central-mailer-technical-worker`.
+Create a second service with `ExecStart=/usr/bin/php bin/technical-worker.php` and a distinct unit name such as
+`central-mailer-technical-worker`. `RuntimeMaxSec` makes both services reload the active release shortly after a deploy.
 
 ## GitHub Actions deployment
 
@@ -424,15 +466,26 @@ Configure these secrets separately in both GitHub environments:
 - `API_URL`
 
 Before the first deployment, create the target directory, its `.env`, an empty
-`.central-mailer-api-root` marker file, and a `public_html` directory. `BACKEND_REMOTE_DIR` must be inside
+`.central-mailer-api-root` marker file, and shared `storage/logs` and `storage/attachments` directories. Do not create
+`public_html` as a directory; the workflow manages it as an atomic symlink to the active release. `BACKEND_REMOTE_DIR` must be inside
 `BACKEND_ALLOWED_ROOT`, while `BACKEND_BACKUP_DIR` must be outside `BACKEND_REMOTE_DIR`.
-The server must provide `php`, `realpath`, `rsync`, `unzip`, `mysqldump`, and `gzip`. Set `APP_ENV=staging`
+The server must provide `php`, `realpath`, `rsync`, `unzip`, `mysqldump`, `gzip`, and `curl`. Set `APP_ENV=staging`
 or `APP_ENV=production` in each target `.env` to match its GitHub environment.
 
-The web server document root should be `public_html`. The workflow synchronizes it from `public`, removing
-old frontend files while preserving `.well-known` for certificate validation. Application code, `.env`,
-logs, attachments, and database backups stay outside the public web directory. Create and enable both
-worker processes separately before the first deployment.
+The web server document root should be `public_html`, and worker services should execute
+`BACKEND_REMOTE_DIR/current/bin/worker.php` and `BACKEND_REMOTE_DIR/current/bin/technical-worker.php`. The workflow
+deploys into `releases`, validates configuration, runs migrations, switches `current` and `public_html` symlinks,
+checks health, and rolls application symlinks back when health fails. Logs, attachments, and database backups stay
+outside release directories. The `.well-known` directory is shared across releases for certificate validation.
+Database backups are encrypted with AES-256 using `BACKUP_ENCRYPTION_KEY`. Old backups and releases are removed
+according to retention settings.
+
+Decrypt a backup before restore:
+
+```bash
+BACKUP_ENCRYPTION_KEY='...' openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY \
+  -in predeploy-production-YYYYMMDD-HHMMSS.sql.gz.enc | gzip -dc > restore.sql
+```
 
 ## Security
 
@@ -442,6 +495,10 @@ worker processes separately before the first deployment.
 - `from` always comes from `.env`.
 - The email address, priority, subject length, body size, metadata size, attachment count, attachment size, and attachment MIME type are validated.
 - Applications are isolated by `sourceApp`, which is derived from the API key.
+- Production startup refuses debug mode, wildcard CORS, public docs, non-HTTPS URLs, SMTP debug, weak configured API keys, and invalid SMTP encryption modes.
+- Configure reverse-proxy or web-server rate limiting for invalid API-key attempts in addition to application-level per-client limits.
+- Configure the web server request-body limit to no more than `APP_MAX_REQUEST_BODY_BYTES`. Apache uses
+  `LimitRequestBody` from `public/.htaccess`; nginx should use `client_max_body_size`.
 
 ## How to switch SMTP to Brevo later
 

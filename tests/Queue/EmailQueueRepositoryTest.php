@@ -9,6 +9,38 @@ use CentralMailer\Tests\Support\DatabaseTestCase;
 
 final class EmailQueueRepositoryTest extends DatabaseTestCase
 {
+    public function testRejectsEnqueueWhenClientQueueCapacityIsReached(): void
+    {
+        $this->insertQueueRow();
+
+        $this->expectException(\CentralMailer\Queue\QueueCapacityExceededException::class);
+        $this->repository->assertCanEnqueue('app-a', 1, 0, 1, 1000);
+    }
+
+    public function testRejectsEnqueueWhenAttachmentCapacityIsReached(): void
+    {
+        $id = $this->insertQueueRow();
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO email_attachments
+             (id, email_id, filename, content_type, size_bytes, sha256, storage_path, deleted_at, created_at)
+             VALUES
+             (:id, :email_id, :filename, :content_type, :size_bytes, :sha256, :storage_path, NULL, :created_at)'
+        );
+        $stmt->execute([
+            'id' => 'attachment-1',
+            'email_id' => $id,
+            'filename' => 'file.pdf',
+            'content_type' => 'application/pdf',
+            'size_bytes' => 900,
+            'sha256' => str_repeat('a', 64),
+            'storage_path' => $id . '/file',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+
+        $this->expectException(\CentralMailer\Queue\QueueCapacityExceededException::class);
+        $this->repository->assertCanEnqueue('app-a', 1, 101, 10, 1000);
+    }
+
     public function testFindForSourceAppReturnsProviderMessageId(): void
     {
         $id = $this->insertQueueRow(['provider_message_id' => '<message-id@mailer.test>']);
@@ -144,7 +176,7 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
 
     public function testInsertReplaysSameIdempotencyKeyAndRejectsDifferentPayload(): void
     {
-        $data = $this->queueData();
+        $data = [...$this->queueData(), 'maxQueuedEmailsPerClient' => 1];
 
         $created = $this->repository->insert($data);
         $replayed = $this->repository->insert($data);
