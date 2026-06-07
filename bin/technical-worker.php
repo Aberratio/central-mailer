@@ -43,6 +43,8 @@ $worker = new EmailWorker(
 $logger->info('Technical email worker started');
 
 while (true) {
-    $worker->runOnce();
-    sleep($env->int('TECHNICAL_EMAIL_WORKER_SLEEP_SECONDS', 10));
+    $processed = $worker->runOnce();
+    if ($processed === 0) {
+        sleep($env->int('TECHNICAL_EMAIL_WORKER_SLEEP_SECONDS', 10));
+    }
 }

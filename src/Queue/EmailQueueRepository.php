@@ -206,8 +206,7 @@ final class EmailQueueRepository
     public function findForSourceApp(string $id, string $sourceApp): ?array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT q.id, q.status, q.source_app, q.recipient_email, COALESCE(q.subject, m.subject) AS subject, q.priority,
-                    q.attempts, q.last_error, q.provider_message_id, q.created_at, q.sent_at, q.batch_id
+            self::statusSelectSql() . '
              FROM email_queue q
              LEFT JOIN email_messages m ON m.id = q.message_id
              WHERE q.id = :id AND q.source_app = :source_app'
@@ -216,6 +215,68 @@ final class EmailQueueRepository
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function findForSourceAppBetween(string $sourceApp, string $from, string $to): array
+    {
+        $stmt = $this->pdo->prepare(
+            self::statusSelectSql() . '
+             FROM email_queue q
+             LEFT JOIN email_messages m ON m.id = q.message_id
+             WHERE q.source_app = :source_app
+               AND q.created_at >= :from
+               AND q.created_at <= :to
+             ORDER BY q.created_at DESC, q.id DESC'
+        );
+        $stmt->execute(['source_app' => $sourceApp, 'from' => $from, 'to' => $to]);
+
+        return $stmt->fetchAll();
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function findUnsentForSourceApp(string $sourceApp): array
+    {
+        $stmt = $this->pdo->prepare(
+            self::statusSelectSql() . '
+             FROM email_queue q
+             LEFT JOIN email_messages m ON m.id = q.message_id
+             WHERE q.source_app = :source_app AND q.status <> "sent"
+             ORDER BY q.created_at ASC, q.id ASC'
+        );
+        $stmt->execute(['source_app' => $sourceApp]);
+
+        return $stmt->fetchAll();
+    }
+
+    /** @return array<string, mixed>|null */
+    public function findBatchForSourceApp(string $id, string $sourceApp): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT b.id, b.source_app, b.created_at, m.subject
+             FROM email_batches b
+             INNER JOIN email_messages m ON m.id = b.message_id
+             WHERE b.id = :id AND b.source_app = :source_app'
+        );
+        $stmt->execute(['id' => $id, 'source_app' => $sourceApp]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function findBatchEmailsForSourceApp(string $batchId, string $sourceApp): array
+    {
+        $stmt = $this->pdo->prepare(
+            self::statusSelectSql() . '
+             FROM email_queue q
+             LEFT JOIN email_messages m ON m.id = q.message_id
+             WHERE q.batch_id = :batch_id AND q.source_app = :source_app
+             ORDER BY q.created_at ASC, q.id ASC'
+        );
+        $stmt->execute(['batch_id' => $batchId, 'source_app' => $sourceApp]);
+
+        return $stmt->fetchAll();
     }
 
     public function assertCanEnqueue(
@@ -663,6 +724,22 @@ final class EmailQueueRepository
     }
 
     /** @return list<array<string, mixed>> */
+    public function findBatchEventsForSourceApp(string $batchId, string $sourceApp): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT e.email_id, e.event_type, e.status, e.attempt, e.error_code, e.error_message,
+                    e.provider_message_id, e.details, e.created_at
+             FROM email_events e
+             INNER JOIN email_queue q ON q.id = e.email_id
+             WHERE q.batch_id = :batch_id AND q.source_app = :source_app
+             ORDER BY e.id ASC'
+        );
+        $stmt->execute(['batch_id' => $batchId, 'source_app' => $sourceApp]);
+
+        return $stmt->fetchAll();
+    }
+
+    /** @return list<array<string, mixed>> */
     public function findAttachments(string $emailId): array
     {
         $stmt = $this->pdo->prepare(
@@ -925,6 +1002,12 @@ final class EmailQueueRepository
     private static function now(): string
     {
         return (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+    }
+
+    private static function statusSelectSql(): string
+    {
+        return 'SELECT q.id, q.status, q.source_app, q.recipient_email, COALESCE(q.subject, m.subject) AS subject, q.priority,
+                    q.attempts, q.last_error, q.provider_message_id, q.created_at, q.updated_at, q.sent_at, q.batch_id';
     }
 
 }
