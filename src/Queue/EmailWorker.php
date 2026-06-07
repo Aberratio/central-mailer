@@ -33,7 +33,7 @@ final class EmailWorker
         $this->branding = $branding ?? new EmailBranding();
     }
 
-    public function runOnce(): void
+    public function runOnce(): int
     {
         $this->releaseStaleProcessing();
         $this->cleanupTerminalAttachments();
@@ -41,10 +41,15 @@ final class EmailWorker
         $batchSize = $this->env->int('EMAIL_WORKER_BATCH_SIZE', 20);
         $leaseSeconds = $this->processingTimeoutSeconds();
         $priorityAgingSeconds = $this->env->int('EMAIL_PRIORITY_AGING_SECONDS', 900);
+        if ($this->queue === 'standard') {
+            return $this->runStandardBatch($batchSize, $leaseSeconds, $priorityAgingSeconds);
+        }
+
+        $processed = 0;
         for ($i = 0; $i < $batchSize; $i++) {
             $emails = $this->repository->claimBatch(1, $leaseSeconds, $priorityAgingSeconds, $this->queue);
             if ($emails === []) {
-                return;
+                return $processed;
             }
 
             if (!$this->rateLimiter->acquire(
@@ -62,10 +67,58 @@ final class EmailWorker
                     'windowMinutes' => $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15),
                 ]);
 
-                return;
+                return $processed;
             }
 
             $this->sendOne($emails[0]);
+            $processed++;
+        }
+
+        return $processed;
+    }
+
+    private function runStandardBatch(int $batchSize, int $leaseSeconds, int $priorityAgingSeconds): int
+    {
+        $emails = $this->repository->claimBatch($batchSize, $leaseSeconds, $priorityAgingSeconds, $this->queue);
+        if ($emails === []) {
+            return 0;
+        }
+
+        $processed = 0;
+        foreach ($emails as $index => $email) {
+            if (!$this->rateLimiter->acquire(
+                (string) $email['source_app'],
+                $email['client_rate_limit_count'] === null ? null : (int) $email['client_rate_limit_count'],
+                $email['client_rate_limit_window_minutes'] === null ? null : (int) $email['client_rate_limit_window_minutes']
+            )) {
+                $this->releaseRemainingClaims($emails, $index);
+                $this->logger->info('Email rate limit reached', [
+                    'limit' => $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100),
+                    'windowMinutes' => $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15),
+                    'releasedClaims' => count($emails) - $index,
+                ]);
+
+                return $processed;
+            }
+
+            $this->sendOne($email);
+            $processed++;
+        }
+
+        return $processed;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $emails
+     */
+    private function releaseRemainingClaims(array $emails, int $startIndex): void
+    {
+        for ($i = $startIndex, $count = count($emails); $i < $count; $i++) {
+            $this->repository->releaseClaim(
+                (string) $emails[$i]['id'],
+                (string) $emails[$i]['lease_id'],
+                (string) $emails[$i]['_previous_status']
+            );
         }
     }
 

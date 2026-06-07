@@ -141,6 +141,76 @@ final class EmailWorkerTest extends DatabaseTestCase
         )->fetchColumn());
     }
 
+    public function testStandardWorkerClaimsConfiguredBatchInOneLease(): void
+    {
+        $ids = [
+            $this->insertQueueRow(['id' => 'batch-one', 'created_at' => '2026-01-01 10:00:00']),
+            $this->insertQueueRow(['id' => 'batch-two', 'created_at' => '2026-01-01 10:01:00']),
+            $this->insertQueueRow(['id' => 'batch-three', 'created_at' => '2026-01-01 10:02:00']),
+        ];
+        $provider = new class implements EmailProviderInterface {
+            /** @var list<string> */
+            public array $sentIds = [];
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sentIds[] = $message->id;
+
+                return new EmailSendResult('<' . $message->id . '@mailer.test>');
+            }
+        };
+
+        $processed = $this->worker($provider, 'standard', ['EMAIL_WORKER_BATCH_SIZE' => '3'])->runOnce();
+
+        self::assertSame(3, $processed);
+        self::assertSame($ids, $provider->sentIds);
+        foreach ($ids as $id) {
+            self::assertSame('sent', $this->fetchQueueRow($id)['status']);
+        }
+
+        $eventRows = $this->pdo->query(
+            "SELECT details FROM email_events WHERE event_type = 'processing' ORDER BY id ASC"
+        )->fetchAll();
+        $leaseIds = array_map(
+            static fn (array $row): string => json_decode($row['details'], true, flags: JSON_THROW_ON_ERROR)['leaseId'],
+            $eventRows
+        );
+        self::assertCount(1, array_unique($leaseIds));
+    }
+
+    public function testStandardWorkerReleasesUnsentBatchClaimsWhenRateLimitIsReached(): void
+    {
+        $firstId = $this->insertQueueRow(['id' => 'limited-one', 'created_at' => '2026-01-01 10:00:00']);
+        $secondId = $this->insertQueueRow(['id' => 'limited-two', 'created_at' => '2026-01-01 10:01:00']);
+        $thirdId = $this->insertQueueRow(['id' => 'limited-three', 'created_at' => '2026-01-01 10:02:00']);
+        $provider = new class implements EmailProviderInterface {
+            /** @var list<string> */
+            public array $sentIds = [];
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sentIds[] = $message->id;
+
+                return new EmailSendResult('<' . $message->id . '@mailer.test>');
+            }
+        };
+
+        $processed = $this->worker($provider, 'standard', [
+            'EMAIL_WORKER_BATCH_SIZE' => '3',
+            'EMAIL_RATE_LIMIT_COUNT' => '2',
+        ])->runOnce();
+
+        self::assertSame(2, $processed);
+        self::assertSame([$firstId, $secondId], $provider->sentIds);
+        self::assertSame('sent', $this->fetchQueueRow($firstId)['status']);
+        self::assertSame('sent', $this->fetchQueueRow($secondId)['status']);
+
+        $third = $this->fetchQueueRow($thirdId);
+        self::assertSame('pending', $third['status']);
+        self::assertNull($third['lease_id']);
+        self::assertSame(0, $third['attempts']);
+    }
+
     public function testAppliesGlobalBrandingBeforeSending(): void
     {
         $this->insertQueueRow([

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Http\Routes;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Http\ApiVersion;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App;
 use Slim\Psr7\Response;
@@ -77,7 +78,7 @@ HTML;
             'openapi' => '3.0.3',
             'info' => [
                 'title' => 'Central Mailer API',
-                'version' => '1.0.0',
+                'version' => ApiVersion::VERSION,
                 'description' => implode("\n\n", [
                     'Centralna usluga kolejkowanej wysylki e-mail przez SMTP.',
                     'Kazdy klient uwierzytelnia sie naglowkiem `X-API-Key`. Klucz okresla aplikacje zrodlowa, a aplikacja moze odczytywac tylko wlasne wiadomosci.',
@@ -117,7 +118,7 @@ HTML;
                                 'content' => [
                                     'application/json' => [
                                         'schema' => ['$ref' => '#/components/schemas/HealthResponse'],
-                                        'example' => ['status' => 'ok'],
+                                        'example' => ['status' => 'ok', 'apiVersion' => ApiVersion::VERSION],
                                     ],
                                 ],
                             ],
@@ -126,6 +127,25 @@ HTML;
                     ],
                 ],
                 '/emails' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Listuje statusy e-maili z zakresu czasu',
+                        'description' => 'Zwraca aktualne statusy wiadomosci aplikacji zrodlowej. Zakres dotyczy `createdAt`; bez parametrow domyslnie obejmuje dzisiaj.',
+                        'operationId' => 'listEmails',
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/FromDateTime'],
+                            ['$ref' => '#/components/parameters/ToDateTime'],
+                        ],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Lista statusow wiadomosci.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailListResponse']]],
+                            ],
+                            '400' => ['$ref' => '#/components/responses/ValidationError'],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
                     'post' => [
                         'tags' => ['Emails'],
                         'summary' => 'Dodaje e-mail do kolejki',
@@ -176,6 +196,39 @@ HTML;
                         ],
                     ],
                 ],
+                '/emails/unsent' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Listuje e-maile niewyslane',
+                        'description' => 'Zwraca wszystkie wiadomosci aplikacji zrodlowej, ktorych aktualny status jest inny niz `sent`.',
+                        'operationId' => 'listUnsentEmails',
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Lista wiadomosci niewyslanych.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailUnsentListResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
+                '/emails/worker/run' => [
+                    'post' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Uruchamia pojedynczy przebieg workera',
+                        'description' => 'Awaryjnie wykonuje jeden synchroniczny przebieg standardowego workera. Endpoint moze realnie wyslac wiadomosci przez skonfigurowany SMTP.',
+                        'operationId' => 'runEmailWorkerOnce',
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Worker wykonal pojedynczy przebieg.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/WorkerRunResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '503' => ['$ref' => '#/components/responses/ServiceUnavailableError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
                 '/emails/batch' => [
                     'post' => [
                         'tags' => ['Emails'],
@@ -218,6 +271,46 @@ HTML;
                             '409' => ['$ref' => '#/components/responses/IdempotencyConflict'],
                             '429' => ['$ref' => '#/components/responses/TooManyRequests'],
                             '413' => ['$ref' => '#/components/responses/RequestTooLarge'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
+                '/emails/batch/{id}' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Pobiera status batcha e-maili',
+                        'description' => 'Zwraca batch i aktualne statusy wszystkich wiadomosci w paczce.',
+                        'operationId' => 'getEmailBatch',
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/BatchId'],
+                        ],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Status batcha.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailBatchStatusResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '404' => ['$ref' => '#/components/responses/NotFoundError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
+                '/emails/batch/{id}/events' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Pobiera historie zdarzen batcha',
+                        'description' => 'Zwraca chronologiczna historie zdarzen wszystkich wiadomosci w paczce.',
+                        'operationId' => 'getEmailBatchEvents',
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/BatchId'],
+                        ],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Historia zdarzen batcha.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailBatchEventsResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '404' => ['$ref' => '#/components/responses/NotFoundError'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
                         ],
                     ],
@@ -292,6 +385,30 @@ HTML;
                         'description' => 'Identyfikator wiadomosci zwrocony przez POST /emails lub w odpowiedzi batch.',
                         'example' => '550e8400-e29b-41d4-a716-446655440000',
                     ],
+                    'BatchId' => [
+                        'name' => 'id',
+                        'in' => 'path',
+                        'required' => true,
+                        'schema' => [
+                            'type' => 'string',
+                            'format' => 'uuid',
+                        ],
+                        'description' => 'Identyfikator batcha zwrocony przez POST /emails/batch.',
+                    ],
+                    'FromDateTime' => [
+                        'name' => 'from',
+                        'in' => 'query',
+                        'required' => false,
+                        'schema' => ['type' => 'string'],
+                        'description' => 'Poczatek zakresu `createdAt` w formacie `Y-m-d` albo `Y-m-d H:i:s`. Domyslnie poczatek dzisiejszego dnia.',
+                    ],
+                    'ToDateTime' => [
+                        'name' => 'to',
+                        'in' => 'query',
+                        'required' => false,
+                        'schema' => ['type' => 'string'],
+                        'description' => 'Koniec zakresu `createdAt` w formacie `Y-m-d` albo `Y-m-d H:i:s`. Domyslnie koniec dzisiejszego dnia.',
+                    ],
                 ],
                 'securitySchemes' => [
                     'ApiKeyAuth' => [
@@ -304,12 +421,16 @@ HTML;
                 'schemas' => [
                     'HealthResponse' => [
                         'type' => 'object',
-                        'required' => ['status'],
+                        'required' => ['status', 'apiVersion'],
                         'properties' => [
                             'status' => [
                                 'type' => 'string',
                                 'enum' => ['ok'],
                                 'example' => 'ok',
+                            ],
+                            'apiVersion' => [
+                                'type' => 'string',
+                                'example' => ApiVersion::VERSION,
                             ],
                         ],
                     ],
@@ -446,6 +567,50 @@ HTML;
                             ],
                         ],
                     ],
+                    'EmailBatchStatusResponse' => [
+                        'type' => 'object',
+                        'required' => ['id', 'sourceApp', 'subject', 'createdAt', 'emails'],
+                        'properties' => [
+                            'id' => ['type' => 'string', 'format' => 'uuid'],
+                            'sourceApp' => ['type' => 'string'],
+                            'subject' => ['type' => 'string'],
+                            'createdAt' => ['type' => 'string', 'format' => 'date-time'],
+                            'emails' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailStatusResponse'],
+                            ],
+                        ],
+                    ],
+                    'EmailListResponse' => [
+                        'type' => 'object',
+                        'required' => ['from', 'to', 'emails'],
+                        'properties' => [
+                            'from' => ['type' => 'string', 'format' => 'date-time'],
+                            'to' => ['type' => 'string', 'format' => 'date-time'],
+                            'emails' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailStatusResponse'],
+                            ],
+                        ],
+                    ],
+                    'EmailUnsentListResponse' => [
+                        'type' => 'object',
+                        'required' => ['emails'],
+                        'properties' => [
+                            'emails' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailStatusResponse'],
+                            ],
+                        ],
+                    ],
+                    'WorkerRunResponse' => [
+                        'type' => 'object',
+                        'required' => ['status', 'queue'],
+                        'properties' => [
+                            'status' => ['type' => 'string', 'enum' => ['ok']],
+                            'queue' => ['type' => 'string', 'enum' => ['standard']],
+                        ],
+                    ],
                     'EmailQueuedResponse' => [
                         'type' => 'object',
                         'description' => 'Potwierdzenie zapisania wiadomosci w kolejce albo wynik idempotentnego powtorzenia.',
@@ -468,7 +633,7 @@ HTML;
                     'EmailStatusResponse' => [
                         'type' => 'object',
                         'description' => 'Biezacy stan wiadomosci. Pola nullable sa zawsze zwracane, ale moga nie miec jeszcze wartosci.',
-                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'lastError', 'providerMessageId', 'createdAt', 'sentAt', 'batchId'],
+                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'lastError', 'providerMessageId', 'createdAt', 'updatedAt', 'sentAt', 'batchId'],
                         'properties' => [
                             'id' => [
                                 'type' => 'string',
@@ -515,6 +680,10 @@ HTML;
                                 'type' => 'string',
                                 'format' => 'date-time',
                             ],
+                            'updatedAt' => [
+                                'type' => 'string',
+                                'format' => 'date-time',
+                            ],
                             'sentAt' => [
                                 'type' => 'string',
                                 'format' => 'date-time',
@@ -537,6 +706,29 @@ HTML;
                             'events' => [
                                 'type' => 'array',
                                 'items' => ['$ref' => '#/components/schemas/EmailEvent'],
+                            ],
+                        ],
+                    ],
+                    'EmailBatchEventsResponse' => [
+                        'type' => 'object',
+                        'required' => ['id', 'events'],
+                        'properties' => [
+                            'id' => ['type' => 'string', 'format' => 'uuid'],
+                            'events' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailBatchEvent'],
+                            ],
+                        ],
+                    ],
+                    'EmailBatchEvent' => [
+                        'allOf' => [
+                            ['$ref' => '#/components/schemas/EmailEvent'],
+                            [
+                                'type' => 'object',
+                                'required' => ['emailId'],
+                                'properties' => [
+                                    'emailId' => ['type' => 'string', 'format' => 'uuid'],
+                                ],
                             ],
                         ],
                     ],
@@ -643,6 +835,15 @@ HTML;
                             'application/json' => [
                                 'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
                                 'example' => ['error' => 'Internal server error'],
+                            ],
+                        ],
+                    ],
+                    'ServiceUnavailableError' => [
+                        'description' => 'Funkcja jest niedostepna w tym runtime.',
+                        'content' => [
+                            'application/json' => [
+                                'schema' => ['$ref' => '#/components/schemas/ErrorResponse'],
+                                'example' => ['error' => 'Worker is not available in this runtime'],
                             ],
                         ],
                     ],

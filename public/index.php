@@ -21,7 +21,10 @@ use CentralMailer\Http\Routes\OpenApiRoutes;
 use CentralMailer\Logging\LoggerFactory;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EmailQueueService;
+use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\EnqueueRateLimitRepository;
+use CentralMailer\Queue\RateLimiter;
+use CentralMailer\Queue\RateLimitRepository;
 use CentralMailer\Validation\EmailRequestValidator;
 use DI\Container;
 use Dotenv\Dotenv;
@@ -55,6 +58,8 @@ $container->set(LoggerInterface::class, function ($c) use ($root) {
 $container->set(AttachmentStorage::class, fn () => new AttachmentStorage($root . '/storage/attachments'));
 $container->set(EmailQueueRepository::class, fn ($c) => new EmailQueueRepository($c->get(PDO::class)));
 $container->set(EnqueueRateLimitRepository::class, fn ($c) => new EnqueueRateLimitRepository($c->get(PDO::class)));
+$container->set(RateLimitRepository::class, fn ($c) => new RateLimitRepository($c->get(PDO::class)));
+$container->set(RateLimiter::class, fn ($c) => new RateLimiter($c->get(RateLimitRepository::class), $c->get(Env::class)));
 $container->set(EmailRequestValidator::class, fn ($c) => new EmailRequestValidator($c->get(Env::class)));
 $container->set(EmailQueueService::class, fn ($c) => new EmailQueueService(
     $c->get(EmailQueueRepository::class),
@@ -64,6 +69,14 @@ $container->set(EmailQueueService::class, fn ($c) => new EmailQueueService(
     $c->get(Env::class)
 ));
 $container->set(EmailProviderInterface::class, fn ($c) => new SmtpEmailProvider($c->get(Env::class)));
+$container->set(EmailWorker::class, fn ($c) => new EmailWorker(
+    $c->get(EmailQueueRepository::class),
+    $c->get(EmailProviderInterface::class),
+    $c->get(RateLimiter::class),
+    $c->get(LoggerInterface::class),
+    $c->get(Env::class),
+    $c->get(AttachmentStorage::class)
+));
 
 AppFactory::setContainer($container);
 $app = AppFactory::create();
