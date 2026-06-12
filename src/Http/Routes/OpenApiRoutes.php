@@ -510,7 +510,7 @@ HTML;
                     ],
                     'EmailBatchRequest' => [
                         'type' => 'object',
-                        'description' => 'Wspolna tresc wysylana jako osobne wiadomosci do wielu odbiorcow. Zalaczniki nie sa obslugiwane.',
+                        'description' => 'Wspolna tresc wysylana jako osobne wiadomosci do wielu odbiorcow. Odbiorcy moga nadpisac temat, tresc, metadata i zalaczniki.',
                         'required' => ['subject', 'html', 'recipients'],
                         'properties' => [
                             'subject' => ['type' => 'string', 'maxLength' => 255, 'description' => 'Wspolny, niepusty temat.'],
@@ -527,6 +527,12 @@ HTML;
                                 'nullable' => true,
                                 'additionalProperties' => true,
                                 'description' => 'Wspolne metadata dla wszystkich wiadomosci, maksymalnie 64 000 bajtow jako JSON.',
+                            ],
+                            'attachments' => [
+                                'type' => 'array',
+                                'maxItems' => $maxAttachmentCount,
+                                'description' => 'Opcjonalne wspolne zalaczniki kopiowane do kazdego odbiorcy.',
+                                'items' => ['$ref' => '#/components/schemas/EmailAttachmentRequest'],
                             ],
                             'recipients' => [
                                 'type' => 'array',
@@ -552,6 +558,15 @@ HTML;
                                 'nullable' => true,
                                 'additionalProperties' => true,
                                 'description' => 'Metadata tylko dla tego odbiorcy, maksymalnie 64 000 bajtow jako JSON.',
+                            ],
+                            'subject' => ['type' => 'string', 'nullable' => true, 'maxLength' => 255, 'description' => 'Opcjonalny temat tylko dla tego odbiorcy.'],
+                            'html' => ['type' => 'string', 'nullable' => true, 'maxLength' => 1000000, 'description' => 'Opcjonalna tresc HTML tylko dla tego odbiorcy.'],
+                            'text' => ['type' => 'string', 'nullable' => true, 'maxLength' => 1000000, 'description' => 'Opcjonalna wersja tekstowa tylko dla tego odbiorcy.'],
+                            'attachments' => [
+                                'type' => 'array',
+                                'maxItems' => $maxAttachmentCount,
+                                'description' => 'Opcjonalne zalaczniki tylko dla tego odbiorcy.',
+                                'items' => ['$ref' => '#/components/schemas/EmailAttachmentRequest'],
                             ],
                         ],
                     ],

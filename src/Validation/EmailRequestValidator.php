@@ -66,10 +66,6 @@ final class EmailRequestValidator
     /** @param array<string, mixed> $payload */
     public function validateBatchPayload(array $payload): array
     {
-        if (isset($payload['attachments'])) {
-            throw new \InvalidArgumentException('Attachments are not supported for batch requests');
-        }
-
         $recipients = $payload['recipients'] ?? null;
         if (!is_array($recipients) || $recipients === []) {
             throw new \InvalidArgumentException('Recipients must be a non-empty array');
@@ -91,16 +87,15 @@ final class EmailRequestValidator
             'text' => $payload['text'] ?? null,
             'priority' => $payload['priority'] ?? 'normal',
             'metadata' => $payload['metadata'] ?? null,
+            'attachments' => $payload['attachments'] ?? [],
         ]);
         unset($common['to'], $common['attachments']);
+        $commonAttachments = $this->attachments($payload['attachments'] ?? []);
 
         $validatedRecipients = [];
         foreach ($recipients as $index => $recipient) {
             if (!is_array($recipient)) {
                 throw new \InvalidArgumentException(sprintf('Recipient at index %d must be an object', $index));
-            }
-            if (isset($recipient['attachments'])) {
-                throw new \InvalidArgumentException('Attachments are not supported for batch requests');
             }
             $metadata = $recipient['metadata'] ?? null;
             if ($metadata !== null && !is_array($metadata)) {
@@ -109,14 +104,42 @@ final class EmailRequestValidator
             if ($metadata !== null && strlen(json_encode($metadata, JSON_THROW_ON_ERROR)) > self::MAX_METADATA_BYTES) {
                 throw new \InvalidArgumentException(sprintf('Recipient metadata at index %d is too large', $index));
             }
+            $subject = $this->optionalString($recipient['subject'] ?? null, 'recipient subject');
+            if ($subject !== null && mb_strlen($subject) > self::MAX_SUBJECT_LENGTH) {
+                throw new \InvalidArgumentException(sprintf('Recipient subject at index %d is too long', $index));
+            }
+            $html = $this->optionalString($recipient['html'] ?? null, 'recipient html');
+            if ($html !== null && strlen($html) > self::MAX_HTML_BYTES) {
+                throw new \InvalidArgumentException(sprintf('Recipient HTML body at index %d is too large', $index));
+            }
+            $text = $this->optionalString($recipient['text'] ?? null, 'recipient text');
+            if ($text !== null && strlen($text) > self::MAX_TEXT_BYTES) {
+                throw new \InvalidArgumentException(sprintf('Recipient text body at index %d is too large', $index));
+            }
+
+            $recipientAttachments = $this->attachments($recipient['attachments'] ?? []);
+            $maxCount = $this->env->int('EMAIL_ATTACHMENT_MAX_COUNT', 5);
+            if (count($commonAttachments) + count($recipientAttachments) > $maxCount) {
+                throw new \InvalidArgumentException(sprintf('Recipient attachments at index %d exceed the %d file limit', $index, $maxCount));
+            }
+            $combinedAttachmentBytes = array_sum(array_column($commonAttachments, 'sizeBytes'))
+                + array_sum(array_column($recipientAttachments, 'sizeBytes'));
+            $maxBytes = $this->env->int('EMAIL_ATTACHMENT_MAX_TOTAL_BYTES', 5_000_000);
+            if ($combinedAttachmentBytes > $maxBytes) {
+                throw new \InvalidArgumentException(sprintf('Recipient attachments at index %d exceed the %d byte limit', $index, $maxBytes));
+            }
 
             $validatedRecipients[] = [
                 'to' => $this->email($recipient['to'] ?? null),
                 'metadata' => $metadata,
+                'subject' => $subject,
+                'html' => $html,
+                'text' => $text,
+                'attachments' => $recipientAttachments,
             ];
         }
 
-        return [...$common, 'recipients' => $validatedRecipients];
+        return [...$common, 'attachments' => $commonAttachments, 'recipients' => $validatedRecipients];
     }
 
     private function priority(mixed $value): string
