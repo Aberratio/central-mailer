@@ -17,9 +17,11 @@ final class EmailBrandingTest extends TestCase
 
         $decorated = (new EmailBranding())->apply($message);
 
-        self::assertStringContainsString('Zmierzymy Czas', $decorated->html);
+        self::assertStringNotContainsString('Zmierzymy Czas', $decorated->html);
+        self::assertStringContainsString('<p>Body</p>', $decorated->html);
+        self::assertStringContainsString('zmierzymyczas.pl', $decorated->html);
         self::assertStringContainsString('Wiadomosc zostala wyslana automatycznie.', $decorated->html);
-        self::assertSame("Body\n\n--\nWiadomosc zostala wyslana automatycznie.\nZmierzymy Czas", $decorated->text);
+        self::assertSame("Body\n\n--\nWiadomosc zostala wyslana automatycznie.\nzmierzymyczas.pl", $decorated->text);
     }
 
     public function testAddsHeaderFooterAndPlainTextFooter(): void
@@ -49,7 +51,7 @@ final class EmailBrandingTest extends TestCase
 
         $decorated = $branding->apply($this->message('<html><body class="mail"><p>Body</p></body></html>', null));
 
-        self::assertMatchesRegularExpression('/<body class="mail">.*Example.*<p>Body<\/p>.*Footer \$1.*<\/body>/s', $decorated->html);
+        self::assertMatchesRegularExpression('/<body class="mail">.*<p>Body<\/p>.*Footer \$1.*Example.*<\/body>/s', $decorated->html);
         self::assertNull($decorated->text);
     }
 

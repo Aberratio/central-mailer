@@ -8,7 +8,7 @@ final class EmailBrandConfig
 {
     public function __construct(
         public readonly string $senderName = 'Zmierzymy Czas',
-        public readonly string $brandName = 'Zmierzymy Czas',
+        public readonly string $brandName = 'zmierzymyczas.pl',
         public readonly ?string $logoUrl = null,
         public readonly ?string $replyToEmail = null,
         public readonly ?string $replyToName = null,
