@@ -33,22 +33,14 @@ final class EmailBranding
 
     private function htmlHeader(): string
     {
-        $logo = $this->config->logoUrl === null
-            ? ''
-            : sprintf(
-                '<img src="%s" alt="%s" style="display:block;max-width:180px;max-height:64px;border:0;">',
-                $this->escape($this->config->logoUrl),
-                $this->escape($this->config->brandName)
-            );
-        $name = sprintf(
-            '<span style="font-family:Arial,sans-serif;font-size:20px;font-weight:700;color:#111827;">%s</span>',
-            $this->escape($this->config->brandName)
-        );
+        if ($this->config->logoUrl === null) {
+            return '';
+        }
 
         return sprintf(
-            '<table role="presentation" width="100%%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 24px 0;"><tr><td style="vertical-align:middle;">%s</td><td style="vertical-align:middle;text-align:right;">%s</td></tr></table>',
-            $logo,
-            $name
+            '<table role="presentation" width="100%%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 24px 0;"><tr><td style="vertical-align:middle;"><img src="%s" alt="%s" style="display:block;max-width:180px;max-height:64px;border:0;"></td></tr></table>',
+            $this->escape($this->config->logoUrl),
+            $this->escape($this->config->brandName)
         );
     }
 
