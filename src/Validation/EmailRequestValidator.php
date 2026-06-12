@@ -210,7 +210,7 @@ final class EmailRequestValidator
     }
 
     /**
-     * @return list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string}>
+     * @return list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string, contentId: string|null}>
      */
     private function attachments(mixed $value): array
     {
@@ -240,6 +240,7 @@ final class EmailRequestValidator
             if (mb_strlen($filename) > 255 || basename($filename) !== $filename || preg_match('/[\x00-\x1F\x7F]/', $filename)) {
                 throw new \InvalidArgumentException(sprintf('Attachment filename at index %d is invalid', $index));
             }
+            $contentId = $this->optionalContentId($attachment['contentId'] ?? null, $index);
 
             $encoded = $attachment['contentBase64'] ?? null;
             if (!is_string($encoded) || $encoded === '') {
@@ -254,6 +255,9 @@ final class EmailRequestValidator
             if (!in_array($contentType, $allowedTypes, true)) {
                 throw new \InvalidArgumentException(sprintf('Attachment MIME type %s is not allowed', $contentType));
             }
+            if ($contentId !== null && !str_starts_with($contentType, 'image/')) {
+                throw new \InvalidArgumentException(sprintf('Inline attachment at index %d must be an image', $index));
+            }
 
             $sizeBytes = strlen($content);
             $totalBytes += $sizeBytes;
@@ -267,9 +271,33 @@ final class EmailRequestValidator
                 'content' => $content,
                 'sizeBytes' => $sizeBytes,
                 'sha256' => hash('sha256', $content),
+                'contentId' => $contentId,
             ];
         }
 
         return $attachments;
+    }
+
+    private function optionalContentId(mixed $value, int $index): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw new \InvalidArgumentException(sprintf('Attachment contentId at index %d must be a string', $index));
+        }
+
+        $contentId = trim($value);
+        if (
+            $contentId === ''
+            || strlen($contentId) > 255
+            || str_starts_with(strtolower($contentId), 'cid:')
+            || preg_match('/^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+)?$/', $contentId) !== 1
+        ) {
+            throw new \InvalidArgumentException(sprintf('Attachment contentId at index %d is invalid', $index));
+        }
+
+        return $contentId;
     }
 }

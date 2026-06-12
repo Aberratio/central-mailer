@@ -141,6 +141,59 @@ final class EmailWorkerTest extends DatabaseTestCase
         )->fetchColumn());
     }
 
+    public function testPassesInlineAttachmentContentIdToProvider(): void
+    {
+        $emailId = Uuid::v4();
+        $content = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=',
+            true
+        );
+        $attachments = $this->attachmentStorage->store($emailId, [[
+            'filename' => 'qr.png',
+            'contentType' => 'image/png',
+            'content' => $content,
+            'sizeBytes' => strlen($content),
+            'sha256' => hash('sha256', $content),
+            'contentId' => 'qr-inline',
+        ]]);
+        $this->repository->insert([
+            'id' => $emailId,
+            'sourceApp' => 'app-a',
+            'idempotencyKey' => null,
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'QR',
+            'html' => '<img src="cid:qr-inline">',
+            'text' => null,
+            'priority' => 'normal',
+            'metadata' => null,
+            'attachments' => $attachments,
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            public ?string $contentId = null;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->contentId = $message->attachments[0]->contentId;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '1']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage
+        );
+
+        $worker->runOnce();
+
+        self::assertSame('qr-inline', $provider->contentId);
+        self::assertSame('sent', $this->fetchQueueRow($emailId)['status']);
+    }
+
     public function testStandardWorkerClaimsConfiguredBatchInOneLease(): void
     {
         $ids = [

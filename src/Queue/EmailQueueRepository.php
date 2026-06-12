@@ -169,9 +169,9 @@ final class EmailQueueRepository
                     'message_id' => $messageId,
                     'batch_id' => $batchId,
                     'recipient_email' => $recipient['to'],
-                    'subject' => $recipient['subject'],
-                    'html_body' => $recipient['html'],
-                    'text_body' => $recipient['text'],
+                    'subject' => $recipient['subject'] ?? null,
+                    'html_body' => $recipient['html'] ?? null,
+                    'text_body' => $recipient['text'] ?? null,
                     'priority' => $data['priority'],
                     'metadata' => $recipientMetadata,
                     'max_attempts' => $data['maxAttempts'] ?? 5,
@@ -747,7 +747,7 @@ final class EmailQueueRepository
     public function findAttachments(string $emailId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, filename, content_type, size_bytes, sha256, storage_path
+            'SELECT id, filename, content_type, size_bytes, sha256, storage_path, content_id
              FROM email_attachments
              WHERE email_id = :email_id AND deleted_at IS NULL
              ORDER BY created_at ASC'
@@ -915,9 +915,9 @@ final class EmailQueueRepository
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_attachments
-             (id, email_id, filename, content_type, size_bytes, sha256, storage_path, created_at)
+             (id, email_id, filename, content_type, size_bytes, sha256, storage_path, content_id, created_at)
              VALUES
-             (:id, :email_id, :filename, :content_type, :size_bytes, :sha256, :storage_path, :created_at)'
+             (:id, :email_id, :filename, :content_type, :size_bytes, :sha256, :storage_path, :content_id, :created_at)'
         );
         foreach ($attachments as $attachment) {
             $stmt->execute([
@@ -928,6 +928,7 @@ final class EmailQueueRepository
                 'size_bytes' => $attachment['sizeBytes'],
                 'sha256' => $attachment['sha256'],
                 'storage_path' => $attachment['storagePath'],
+                'content_id' => $attachment['contentId'] ?? null,
                 'created_at' => $now,
             ]);
         }
@@ -973,6 +974,7 @@ final class EmailQueueRepository
                 'contentType' => $attachment['contentType'],
                 'sizeBytes' => $attachment['sizeBytes'],
                 'sha256' => $attachment['sha256'],
+                'contentId' => $attachment['contentId'] ?? null,
             ],
             $data['attachments'] ?? []
         );
@@ -1003,9 +1005,9 @@ final class EmailQueueRepository
                 static fn (array $recipient): array => [
                     'to' => $recipient['to'],
                     'metadata' => $recipient['metadata'],
-                    'subject' => $recipient['subject'],
-                    'html' => $recipient['html'],
-                    'text' => $recipient['text'],
+                    'subject' => $recipient['subject'] ?? null,
+                    'html' => $recipient['html'] ?? null,
+                    'text' => $recipient['text'] ?? null,
                     'attachments' => self::normalizedAttachments($recipient['attachments'] ?? []),
                 ],
                 $data['recipients']
@@ -1034,6 +1036,7 @@ final class EmailQueueRepository
                 'contentType' => $attachment['contentType'] ?? null,
                 'sizeBytes' => $attachment['sizeBytes'] ?? null,
                 'sha256' => $attachment['sha256'] ?? null,
+                'contentId' => $attachment['contentId'] ?? null,
             ],
             $attachments
         );

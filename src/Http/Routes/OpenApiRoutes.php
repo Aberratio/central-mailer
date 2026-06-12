@@ -506,6 +506,13 @@ HTML;
                                 'format' => 'byte',
                                 'description' => 'Pelna zawartosc pliku zakodowana jako poprawny Base64.',
                             ],
+                            'contentId' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'maxLength' => 255,
+                                'description' => 'Opcjonalny Content-ID dla obrazow inline. W tresci HTML uzyj src="cid:wartosc-contentId".',
+                                'example' => 'participant-qr-abc123',
+                            ],
                         ],
                     ],
                     'EmailBatchRequest' => [

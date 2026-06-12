@@ -159,6 +159,7 @@ abstract class DatabaseTestCase extends TestCase
                 size_bytes INTEGER NOT NULL,
                 sha256 TEXT NOT NULL,
                 storage_path TEXT NOT NULL,
+                content_id TEXT NULL,
                 deleted_at TEXT NULL,
                 created_at TEXT NOT NULL
             )'

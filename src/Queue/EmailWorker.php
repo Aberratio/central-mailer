@@ -138,7 +138,8 @@ final class EmailWorker
                 fn (array $attachment): EmailAttachment => new EmailAttachment(
                     $this->attachmentStorage->absolutePath((string) $attachment['storage_path']),
                     (string) $attachment['filename'],
-                    (string) $attachment['content_type']
+                    (string) $attachment['content_type'],
+                    $attachment['content_id'] === null ? null : (string) $attachment['content_id']
                 ),
                 $this->repository->findAttachments((string) $row['id'])
             );
