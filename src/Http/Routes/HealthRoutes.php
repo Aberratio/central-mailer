@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CentralMailer\Http\Routes;
 
+use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Http\ApiVersion;
 use PDO;
 use Psr\Http\Message\ResponseInterface;
@@ -17,9 +18,14 @@ final class HealthRoutes
 
         $app->get('/health', function ($request, ResponseInterface $response) use ($container): ResponseInterface {
             $container->get(PDO::class)->query('SELECT 1');
+            $container->get(AttachmentStorage::class)->assertWritable();
             $response->getBody()->write(json_encode([
                 'status' => 'ok',
                 'apiVersion' => ApiVersion::VERSION,
+                'checks' => [
+                    'database' => 'ok',
+                    'attachments' => 'writable',
+                ],
             ], JSON_THROW_ON_ERROR));
 
             return $response->withHeader('Content-Type', 'application/json');
