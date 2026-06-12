@@ -63,6 +63,20 @@ final class AttachmentStorage
         return $this->root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
     }
 
+    public function assertWritable(): void
+    {
+        if (!is_dir($this->root) && !mkdir($this->root, 0770, true) && !is_dir($this->root)) {
+            throw new \RuntimeException('Attachment storage directory is not writable');
+        }
+
+        $probePath = $this->root . DIRECTORY_SEPARATOR . '.write-test-' . bin2hex(random_bytes(8));
+        if (file_put_contents($probePath, 'ok', LOCK_EX) === false) {
+            throw new \RuntimeException('Attachment storage directory is not writable');
+        }
+
+        unlink($probePath);
+    }
+
     public function delete(string $emailId): void
     {
         $directory = $this->emailDirectory($emailId);
