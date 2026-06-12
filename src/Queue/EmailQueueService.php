@@ -72,22 +72,43 @@ final class EmailQueueService
     {
         $validated = $this->validator->validateBatchPayload($payload);
         $idempotencyKey = $this->validateIdempotencyKey($idempotencyKey);
+        $attachmentBytes = $this->batchAttachmentBytes($validated);
         if ($idempotencyKey === null) {
             $this->repository->assertCanEnqueue(
                 $sourceApp,
                 count($validated['recipients']),
-                0,
+                $attachmentBytes,
                 $this->maxQueuedEmailsPerClient(),
                 $this->maxActiveAttachmentBytesPerClient()
             );
         }
-        $result = $this->repository->insertBatch([
-            ...$validated,
-            'sourceApp' => $sourceApp,
-            'idempotencyKey' => $idempotencyKey,
-            'maxQueuedEmailsPerClient' => $this->maxQueuedEmailsPerClient(),
-            'maxActiveAttachmentBytesPerClient' => $this->maxActiveAttachmentBytesPerClient(),
-        ]);
+        $storedEmailIds = [];
+        foreach ($validated['recipients'] as $index => $recipient) {
+            $emailId = Uuid::v4();
+            $recipientAttachments = array_merge($validated['attachments'], $recipient['attachments']);
+            $validated['recipients'][$index]['id'] = $emailId;
+            $validated['recipients'][$index]['attachments'] = $this->attachmentStorage->store($emailId, $recipientAttachments);
+            $storedEmailIds[] = $emailId;
+        }
+        try {
+            $result = $this->repository->insertBatch([
+                ...$validated,
+                'sourceApp' => $sourceApp,
+                'idempotencyKey' => $idempotencyKey,
+                'maxQueuedEmailsPerClient' => $this->maxQueuedEmailsPerClient(),
+                'maxActiveAttachmentBytesPerClient' => $this->maxActiveAttachmentBytesPerClient(),
+            ]);
+        } catch (\Throwable $exception) {
+            foreach ($storedEmailIds as $emailId) {
+                $this->attachmentStorage->delete($emailId);
+            }
+            throw $exception;
+        }
+        if (!$result->created) {
+            foreach ($storedEmailIds as $emailId) {
+                $this->attachmentStorage->delete($emailId);
+            }
+        }
 
         $this->logger->info($result->created ? 'Email batch queued' : 'Email batch enqueue replayed', [
             'id' => $result->id,
@@ -97,6 +118,18 @@ final class EmailQueueService
         ]);
 
         return $result;
+    }
+
+    /** @param array<string, mixed> $validated */
+    private function batchAttachmentBytes(array $validated): int
+    {
+        $total = 0;
+        foreach ($validated['recipients'] as $recipient) {
+            $total += array_sum(array_column($validated['attachments'], 'sizeBytes'));
+            $total += array_sum(array_column($recipient['attachments'], 'sizeBytes'));
+        }
+
+        return $total;
     }
 
     private function validateIdempotencyKey(?string $idempotencyKey): ?string

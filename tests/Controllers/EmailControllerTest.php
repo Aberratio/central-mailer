@@ -135,6 +135,45 @@ final class EmailControllerTest extends DatabaseTestCase
         self::assertCount(2, $payload['emails']);
     }
 
+    public function testBatchEndpointStoresRecipientOverridesAndAttachments(): void
+    {
+        $controller = $this->controller();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/emails/batch')
+            ->withAttribute('sourceApp', 'app-a')
+            ->withParsedBody([
+                'subject' => 'Batch',
+                'html' => '<p>Batch</p>',
+                'recipients' => [
+                    [
+                        'to' => 'one@deliverable.test',
+                        'subject' => 'Personalized QR',
+                        'html' => '<p>Personalized</p>',
+                        'text' => 'Personalized',
+                        'attachments' => [[
+                            'filename' => 'qr.png',
+                            'contentBase64' => self::tinyPngBase64(),
+                        ]],
+                    ],
+                ],
+            ]);
+
+        $response = $controller->batch($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $emailId = $payload['emails'][0]['id'];
+        $queueRow = $this->pdo->query('SELECT subject, html_body, text_body FROM email_queue WHERE id = ' . $this->pdo->quote($emailId))->fetch();
+        $attachment = $this->pdo->query('SELECT * FROM email_attachments WHERE email_id = ' . $this->pdo->quote($emailId))->fetch();
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('Personalized QR', $queueRow['subject']);
+        self::assertSame('<p>Personalized</p>', $queueRow['html_body']);
+        self::assertSame('Personalized', $queueRow['text_body']);
+        self::assertSame('image/png', $attachment['content_type']);
+        self::assertFileExists($this->attachmentStorage->absolutePath($attachment['storage_path']));
+
+        $this->attachmentStorage->delete($emailId);
+    }
+
     public function testIndexReturnsEmailsFromRequestedDateRange(): void
     {
         $controller = $this->controller();

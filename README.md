@@ -288,7 +288,7 @@ Attachments are optional and intended for exceptional cases such as QR-code PNG 
 }
 ```
 
-The service validates the real MIME type, stores the file under `storage/attachments`, and deletes it after the message reaches `sent` or `failed`. Multiple worker hosts must share this directory. Batch requests do not support attachments.
+The service validates the real MIME type, stores the file under `storage/attachments`, and deletes it after the message reaches `sent` or `failed`. Multiple worker hosts must share this directory.
 
 ### Add a batch
 
@@ -307,6 +307,11 @@ The service validates the real MIME type, stores the file under `storage/attachm
 ```
 
 Use `Idempotency-Key` for batch requests as well.
+
+Batch recipients may override the common `subject`, `html`, `text`, `metadata`, and `attachments`. This is intended
+for personalized messages such as participant QR-code emails where every recipient receives a different body and PNG
+attachment. Top-level attachments are copied to every recipient; recipient-level attachments are stored only for that
+recipient.
 
 ### Check status
 

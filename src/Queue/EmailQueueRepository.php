@@ -111,7 +111,7 @@ final class EmailQueueRepository
             $this->assertCapacity(
                 (string) $data['sourceApp'],
                 count($data['recipients']),
-                0,
+                self::batchAttachmentBytes($data['recipients']),
                 (int) ($data['maxQueuedEmailsPerClient'] ?? 10_000),
                 (int) ($data['maxActiveAttachmentBytesPerClient'] ?? 100_000_000),
                 true
@@ -152,12 +152,12 @@ final class EmailQueueRepository
                  (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body,
                   text_body, priority, metadata, status, attempts, max_attempts, created_at, updated_at)
                  VALUES
-                 (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, NULL, NULL,
-                  NULL, :priority, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
+                 (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body,
+                  :text_body, :priority, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
             );
             $emails = [];
             foreach ($data['recipients'] as $index => $recipient) {
-                $emailId = Uuid::v4();
+                $emailId = $recipient['id'] ?? Uuid::v4();
                 $recipientMetadata = $recipient['metadata'] === null
                     ? null
                     : json_encode($recipient['metadata'], JSON_THROW_ON_ERROR);
@@ -169,12 +169,16 @@ final class EmailQueueRepository
                     'message_id' => $messageId,
                     'batch_id' => $batchId,
                     'recipient_email' => $recipient['to'],
+                    'subject' => $recipient['subject'],
+                    'html_body' => $recipient['html'],
+                    'text_body' => $recipient['text'],
                     'priority' => $data['priority'],
                     'metadata' => $recipientMetadata,
                     'max_attempts' => $data['maxAttempts'] ?? 5,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
+                $this->insertAttachments($emailId, $recipient['attachments'] ?? [], $now);
                 $this->insertEvent($emailId, 'queued', 'pending', 0, null, null, null, ['batchId' => $batchId], $now);
                 $emails[] = ['id' => $emailId, 'status' => 'pending'];
             }
@@ -994,9 +998,45 @@ final class EmailQueueRepository
             'text' => $data['text'],
             'priority' => $data['priority'],
             'metadata' => $metadata,
-            'recipients' => $data['recipients'],
+            'attachments' => self::normalizedAttachments($data['attachments'] ?? []),
+            'recipients' => array_map(
+                static fn (array $recipient): array => [
+                    'to' => $recipient['to'],
+                    'metadata' => $recipient['metadata'],
+                    'subject' => $recipient['subject'],
+                    'html' => $recipient['html'],
+                    'text' => $recipient['text'],
+                    'attachments' => self::normalizedAttachments($recipient['attachments'] ?? []),
+                ],
+                $data['recipients']
+            ),
             'maxAttempts' => $data['maxAttempts'] ?? 5,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    /** @param list<array<string, mixed>> $recipients */
+    private static function batchAttachmentBytes(array $recipients): int
+    {
+        $total = 0;
+        foreach ($recipients as $recipient) {
+            $total += array_sum(array_column($recipient['attachments'] ?? [], 'sizeBytes'));
+        }
+
+        return $total;
+    }
+
+    /** @param list<array<string, mixed>> $attachments */
+    private static function normalizedAttachments(array $attachments): array
+    {
+        return array_map(
+            static fn (array $attachment): array => [
+                'filename' => $attachment['filename'],
+                'contentType' => $attachment['contentType'] ?? null,
+                'sizeBytes' => $attachment['sizeBytes'] ?? null,
+                'sha256' => $attachment['sha256'] ?? null,
+            ],
+            $attachments
+        );
     }
 
     private static function now(): string
