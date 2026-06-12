@@ -112,6 +112,34 @@ final class EmailControllerTest extends DatabaseTestCase
         $this->attachmentStorage->delete($payload['id']);
     }
 
+    public function testCreateStoresInlinePngAttachmentContentId(): void
+    {
+        $controller = $this->controller();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/emails')
+            ->withAttribute('sourceApp', 'app-a')
+            ->withParsedBody([
+                'to' => 'recipient@deliverable.test',
+                'subject' => 'QR code',
+                'html' => '<img src="cid:qr-inline">',
+                'attachments' => [[
+                    'filename' => 'qr.png',
+                    'contentBase64' => self::tinyPngBase64(),
+                    'contentId' => 'qr-inline',
+                ]],
+            ]);
+
+        $response = $controller->create($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $attachment = $this->pdo->query('SELECT * FROM email_attachments')->fetch();
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('image/png', $attachment['content_type']);
+        self::assertSame('qr-inline', $attachment['content_id']);
+
+        $this->attachmentStorage->delete($payload['id']);
+    }
+
     public function testBatchEndpointCreatesMultipleEmails(): void
     {
         $controller = $this->controller();

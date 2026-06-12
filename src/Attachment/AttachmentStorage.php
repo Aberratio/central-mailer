@@ -13,7 +13,7 @@ final class AttachmentStorage
     }
 
     /**
-     * @param list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string}> $attachments
+     * @param list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string, contentId?: string|null}> $attachments
      * @return list<array<string, mixed>>
      */
     public function store(string $emailId, array $attachments): array
@@ -43,6 +43,7 @@ final class AttachmentStorage
                     'contentType' => $attachment['contentType'],
                     'sizeBytes' => $attachment['sizeBytes'],
                     'sha256' => $attachment['sha256'],
+                    'contentId' => $attachment['contentId'] ?? null,
                     'storagePath' => $relativePath,
                 ];
             }

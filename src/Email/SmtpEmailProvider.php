@@ -33,6 +33,17 @@ final class SmtpEmailProvider implements EmailProviderInterface
             $mail->AltBody = $message->text;
         }
         foreach ($message->attachments as $attachment) {
+            if ($attachment->contentId !== null) {
+                $mail->addEmbeddedImage(
+                    $attachment->path,
+                    $attachment->contentId,
+                    $attachment->filename,
+                    PHPMailer::ENCODING_BASE64,
+                    $attachment->contentType
+                );
+                continue;
+            }
+
             $mail->addAttachment($attachment->path, $attachment->filename, PHPMailer::ENCODING_BASE64, $attachment->contentType);
         }
 
