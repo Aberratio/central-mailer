@@ -25,6 +25,7 @@ use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\EnqueueRateLimitRepository;
 use CentralMailer\Queue\RateLimiter;
 use CentralMailer\Queue\RateLimitRepository;
+use CentralMailer\Queue\WorkerHeartbeatRepository;
 use CentralMailer\Validation\EmailRequestValidator;
 use DI\Container;
 use Dotenv\Dotenv;
@@ -59,6 +60,7 @@ $container->set(AttachmentStorage::class, fn () => new AttachmentStorage($root .
 $container->set(EmailQueueRepository::class, fn ($c) => new EmailQueueRepository($c->get(PDO::class)));
 $container->set(EnqueueRateLimitRepository::class, fn ($c) => new EnqueueRateLimitRepository($c->get(PDO::class)));
 $container->set(RateLimitRepository::class, fn ($c) => new RateLimitRepository($c->get(PDO::class)));
+$container->set(WorkerHeartbeatRepository::class, fn ($c) => new WorkerHeartbeatRepository($c->get(PDO::class)));
 $container->set(RateLimiter::class, fn ($c) => new RateLimiter($c->get(RateLimitRepository::class), $c->get(Env::class)));
 $container->set(EmailRequestValidator::class, fn ($c) => new EmailRequestValidator($c->get(Env::class)));
 $container->set(EmailQueueService::class, fn ($c) => new EmailQueueService(
@@ -68,6 +70,14 @@ $container->set(EmailQueueService::class, fn ($c) => new EmailQueueService(
     $c->get(AttachmentStorage::class),
     $c->get(Env::class)
 ));
+$container->set(EmailController::class, fn ($c) => new EmailController(
+    $c->get(EmailQueueService::class),
+    $c->get(EmailQueueRepository::class),
+    $c->get(EmailWorker::class),
+    $c->get(RateLimitRepository::class),
+    $c->get(WorkerHeartbeatRepository::class),
+    $c->get(Env::class)
+));
 $container->set(EmailProviderInterface::class, fn ($c) => new SmtpEmailProvider($c->get(Env::class)));
 $container->set(EmailWorker::class, fn ($c) => new EmailWorker(
     $c->get(EmailQueueRepository::class),
@@ -75,7 +85,10 @@ $container->set(EmailWorker::class, fn ($c) => new EmailWorker(
     $c->get(RateLimiter::class),
     $c->get(LoggerInterface::class),
     $c->get(Env::class),
-    $c->get(AttachmentStorage::class)
+    $c->get(AttachmentStorage::class),
+    'standard',
+    null,
+    $c->get(WorkerHeartbeatRepository::class)
 ));
 
 AppFactory::setContainer($container);

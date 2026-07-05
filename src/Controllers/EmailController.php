@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace CentralMailer\Controllers;
 
+use CentralMailer\Config\Env;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EmailQueueService;
 use CentralMailer\Queue\EmailWorker;
+use CentralMailer\Queue\RateLimitRepository;
+use CentralMailer\Queue\WorkerHeartbeatRepository;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Slim\Psr7\Response;
@@ -16,7 +19,10 @@ final class EmailController
     public function __construct(
         private readonly EmailQueueService $queueService,
         private readonly EmailQueueRepository $repository,
-        private readonly ?EmailWorker $worker = null
+        private readonly ?EmailWorker $worker = null,
+        private readonly ?RateLimitRepository $rateLimitRepository = null,
+        private readonly ?WorkerHeartbeatRepository $heartbeatRepository = null,
+        private readonly ?Env $env = null
     ) {
     }
 
@@ -44,6 +50,58 @@ final class EmailController
                 fn (array $row): array => $this->emailStatusPayload($row),
                 $this->repository->findUnsentForSourceApp($sourceApp)
             ),
+        ]);
+    }
+
+    public function diagnostics(ServerRequestInterface $request): ResponseInterface
+    {
+        $sourceApp = (string) $request->getAttribute('sourceApp');
+        $now = self::now();
+        $globalWindowMinutes = $this->env?->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15) ?? 15;
+        $globalLimit = $this->env?->int('EMAIL_RATE_LIMIT_COUNT', 100) ?? 100;
+        $clientLimit = $this->repository->clientRateLimitForSourceApp($sourceApp);
+        $clientWindowMinutes = $clientLimit['rateLimitWindowMinutes'] ?? $globalWindowMinutes;
+        $heartbeatFreshSeconds = $this->heartbeatFreshSeconds();
+        $heartbeatFreshSince = (new \DateTimeImmutable(sprintf('-%d seconds', $heartbeatFreshSeconds)))->format('Y-m-d H:i:s');
+        $activeWorkers = $this->heartbeatRepository?->findActiveSince($heartbeatFreshSince) ?? [];
+        $workerCounts = $this->heartbeatRepository?->activeCountsSince($heartbeatFreshSince) ?? ['standard' => 0, 'technical' => 0];
+        $globalSince = (new \DateTimeImmutable(sprintf('-%d minutes', $globalWindowMinutes)))->format('Y-m-d H:i:s');
+        $clientSince = (new \DateTimeImmutable(sprintf('-%d minutes', $clientWindowMinutes)))->format('Y-m-d H:i:s');
+
+        return $this->json([
+            'sourceApp' => $sourceApp,
+            'generatedAt' => $now,
+            'statusCounts' => $this->repository->statusCountsForSourceApp($sourceApp),
+            'backlog' => [
+                'oldestUnsent' => $this->repository->oldestUnsentForSourceApp($sourceApp),
+                'nextDelayedAt' => $this->repository->nextDelayedAttemptForSourceApp($sourceApp, $now),
+                'technicalBlocker' => $this->repository->technicalBlockerForSourceApp($sourceApp),
+            ],
+            'rateLimit' => [
+                'global' => $this->rateLimitRepository?->globalUsage($globalLimit, $globalSince, $globalWindowMinutes),
+                'client' => $this->rateLimitRepository?->clientUsage(
+                    $sourceApp,
+                    $clientLimit['rateLimitCount'] ?? null,
+                    $clientSince,
+                    $clientWindowMinutes
+                ),
+            ],
+            'workers' => [
+                'heartbeatFreshSeconds' => $heartbeatFreshSeconds,
+                'standardActive' => $workerCounts['standard'] > 0,
+                'technicalActive' => $workerCounts['technical'] > 0,
+                'active' => array_map(static fn (array $row): array => [
+                    'workerId' => $row['worker_id'],
+                    'queue' => $row['queue'],
+                    'host' => $row['host'],
+                    'processId' => $row['process_id'] === null ? null : (int) $row['process_id'],
+                    'startedAt' => $row['started_at'],
+                    'lastSeenAt' => $row['last_seen_at'],
+                    'lastProcessedAt' => $row['last_processed_at'],
+                    'lastError' => $row['last_error'],
+                    'processedCount' => (int) $row['processed_count'],
+                ], $activeWorkers),
+            ],
         ]);
     }
 
@@ -223,6 +281,9 @@ final class EmailController
     /** @param array<string, mixed> $row @return array<string, mixed> */
     private function emailStatusPayload(array $row): array
     {
+        $now = new \DateTimeImmutable();
+        $delay = $this->delay($row, $now);
+
         return [
             'id' => $row['id'],
             'status' => $row['status'],
@@ -233,6 +294,18 @@ final class EmailController
             'subject' => $row['subject'],
             'priority' => $row['priority'],
             'attempts' => (int) $row['attempts'],
+            'failedAttempts' => (int) $row['attempts'],
+            'sendAttempts' => (int) ($row['send_attempts'] ?? 0),
+            'nextAttemptAt' => $row['next_attempt_at'] ?? null,
+            'leaseExpiresAt' => $row['lease_expires_at'] ?? null,
+            'delayReason' => $delay['reason'],
+            'delayUntil' => $delay['until'],
+            'queueAgeSeconds' => self::secondsSince((string) $row['created_at'], $now),
+            'processingAgeSeconds' => $row['status'] === 'processing'
+                ? self::secondsSince((string) $row['updated_at'], $now)
+                : null,
+            'lastEventType' => $row['last_event_type'] ?? null,
+            'lastEventAt' => $row['last_event_at'] ?? null,
             'lastError' => $row['last_error'],
             'providerMessageId' => $row['provider_message_id'],
             'createdAt' => $row['created_at'],
@@ -276,6 +349,85 @@ final class EmailController
         }
 
         return 'provider_accepted';
+    }
+
+    /** @param array<string, mixed> $row @return array{reason: string|null, until: string|null} */
+    private function delay(array $row, \DateTimeImmutable $now): array
+    {
+        $status = (string) $row['status'];
+        $nextAttemptAt = $row['next_attempt_at'] ?? null;
+        if (($status === 'pending' || $status === 'retry') && is_string($nextAttemptAt) && $nextAttemptAt !== '') {
+            $nextAttempt = self::dateTime($nextAttemptAt);
+            if ($nextAttempt !== null && $nextAttempt > $now) {
+                $lastEventType = $row['last_event_type'] ?? null;
+
+                return [
+                    'reason' => $lastEventType === 'rate_limited'
+                        ? 'rate_limited'
+                        : ($status === 'retry' ? 'retry_backoff' : 'scheduled'),
+                    'until' => $nextAttemptAt,
+                ];
+            }
+        }
+
+        if ($status === 'processing') {
+            $leaseExpiresAt = $row['lease_expires_at'] ?? null;
+            if (is_string($leaseExpiresAt) && $leaseExpiresAt !== '') {
+                $leaseExpires = self::dateTime($leaseExpiresAt);
+                if ($leaseExpires !== null && $leaseExpires < $now) {
+                    return ['reason' => 'stale_processing', 'until' => $leaseExpiresAt];
+                }
+
+                return ['reason' => 'processing', 'until' => $leaseExpiresAt];
+            }
+        }
+
+        if ($status === 'pending') {
+            return ['reason' => 'awaiting_worker', 'until' => null];
+        }
+        if ($status === 'retry') {
+            return ['reason' => 'retry_due', 'until' => null];
+        }
+
+        return ['reason' => null, 'until' => null];
+    }
+
+    private function heartbeatFreshSeconds(): int
+    {
+        if ($this->env === null) {
+            return 60;
+        }
+
+        return max(
+            10,
+            $this->env->int('EMAIL_WORKER_HEARTBEAT_STALE_SECONDS', 60),
+            $this->env->int('EMAIL_WORKER_SLEEP_SECONDS', 10) * 3,
+            $this->env->int('TECHNICAL_EMAIL_WORKER_SLEEP_SECONDS', 10) * 3
+        );
+    }
+
+    private static function secondsSince(string $value, \DateTimeImmutable $now): ?int
+    {
+        $date = self::dateTime($value);
+        if ($date === null) {
+            return null;
+        }
+
+        return max(0, $now->getTimestamp() - $date->getTimestamp());
+    }
+
+    private static function dateTime(string $value): ?\DateTimeImmutable
+    {
+        try {
+            return new \DateTimeImmutable($value);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private static function now(): string
+    {
+        return (new \DateTimeImmutable())->format('Y-m-d H:i:s');
     }
 
     /** @param array<string, mixed> $payload */

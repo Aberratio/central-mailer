@@ -321,7 +321,7 @@ final class EmailQueueRepository
                 : $this->claimWithSkipLocked($limit, $agingCutoff);
             $ids = array_column($claimed, 'id');
             if ($ids !== []) {
-                $this->setProcessing($ids, $leaseId, $leaseExpiresAt);
+                $this->setProcessing($claimed, $leaseId, $leaseExpiresAt);
                 if ($queue === 'standard') {
                     $this->spendQueueCredits($claimed);
                 }
@@ -339,7 +339,7 @@ final class EmailQueueRepository
                     : $this->claimWithFallback($limit, $agingCutoff);
                 $ids = array_column($claimed, 'id');
                 if ($ids !== []) {
-                    $this->setProcessing($ids, $leaseId, $leaseExpiresAt);
+                    $this->setProcessing($claimed, $leaseId, $leaseExpiresAt);
                     if ($queue === 'standard') {
                         $this->spendQueueCredits($claimed);
                     }
@@ -368,7 +368,14 @@ final class EmailQueueRepository
         return $rows;
     }
 
-    public function releaseClaim(string $id, string $leaseId, string $previousStatus): bool
+    public function releaseClaim(
+        string $id,
+        string $leaseId,
+        string $previousStatus,
+        ?string $nextAttemptAt = null,
+        ?string $rateLimitReason = null,
+        int $attempt = 0
+    ): bool
     {
         if (!in_array($previousStatus, ['pending', 'retry'], true)) {
             throw new \InvalidArgumentException('Previous queue status is invalid');
@@ -378,18 +385,32 @@ final class EmailQueueRepository
         try {
             $stmt = $this->pdo->prepare(
                 'UPDATE email_queue
-                 SET status = :status, lease_id = NULL, lease_expires_at = NULL, updated_at = :updated_at
+                 SET status = :status, next_attempt_at = COALESCE(:next_attempt_at, next_attempt_at),
+                     lease_id = NULL, lease_expires_at = NULL, updated_at = :updated_at
                  WHERE id = :id AND status = "processing" AND lease_id = :lease_id'
             );
             $stmt->execute([
                 'id' => $id,
                 'lease_id' => $leaseId,
                 'status' => $previousStatus,
+                'next_attempt_at' => $nextAttemptAt,
                 'updated_at' => self::now(),
             ]);
             $released = $stmt->rowCount() === 1;
             if ($released) {
-                $this->insertEvent($id, 'rate_limited', $previousStatus, 0, null, null, null, null);
+                $this->insertEvent(
+                    $id,
+                    'rate_limited',
+                    $previousStatus,
+                    $attempt,
+                    $rateLimitReason,
+                    null,
+                    null,
+                    [
+                        'reason' => $rateLimitReason,
+                        'retryAfter' => $nextAttemptAt,
+                    ]
+                );
             }
             $this->pdo->commit();
 
@@ -425,6 +446,85 @@ final class EmailQueueRepository
             $this->pdo->commit();
 
             return $marked;
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
+    }
+
+    public function markSentAfterProviderAccepted(
+        string $id,
+        string $leaseId,
+        ?string $providerMessageId,
+        int $attempt,
+        string $workerId
+    ): string {
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'UPDATE email_queue
+                 SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at,
+                     next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
+                 WHERE id = :id AND status = "processing" AND lease_id = :lease_id'
+            );
+            $now = self::now();
+            $stmt->execute([
+                'id' => $id,
+                'lease_id' => $leaseId,
+                'provider_message_id' => $providerMessageId,
+                'sent_at' => $now,
+                'updated_at' => $now,
+            ]);
+            if ($stmt->rowCount() === 1) {
+                $this->insertEvent($id, 'sent', 'sent', $attempt, null, null, $providerMessageId, null, $now);
+                $this->pdo->commit();
+
+                return 'marked';
+            }
+
+            $latestEvent = $this->latestEvent($id);
+            $timeoutDetails = $latestEvent === null || $latestEvent['details'] === null
+                ? null
+                : json_decode((string) $latestEvent['details'], true, flags: JSON_THROW_ON_ERROR);
+            $isSameLeaseTimeout = $latestEvent !== null
+                && $latestEvent['event_type'] === 'processing_timeout'
+                && is_array($timeoutDetails)
+                && ($timeoutDetails['leaseId'] ?? null) === $leaseId;
+
+            if ($isSameLeaseTimeout) {
+                $reconcile = $this->pdo->prepare(
+                    'UPDATE email_queue
+                     SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at,
+                         next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
+                     WHERE id = :id AND status IN ("retry", "failed") AND provider_message_id IS NULL'
+                );
+                $reconcile->execute([
+                    'id' => $id,
+                    'provider_message_id' => $providerMessageId,
+                    'sent_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                if ($reconcile->rowCount() === 1) {
+                    $this->insertEvent(
+                        $id,
+                        'lease_lost_provider_accepted',
+                        'sent',
+                        $attempt,
+                        'lease_lost',
+                        'Provider accepted the email after the processing lease was released as timed out',
+                        $providerMessageId,
+                        ['leaseId' => $leaseId, 'workerId' => $workerId],
+                        $now
+                    );
+                    $this->pdo->commit();
+
+                    return 'reconciled';
+                }
+            }
+
+            $this->pdo->commit();
+
+            return 'lost';
         } catch (\Throwable $exception) {
             $this->pdo->rollBack();
             throw $exception;
@@ -530,7 +630,7 @@ final class EmailQueueRepository
         $this->pdo->beginTransaction();
         try {
             $select = $this->pdo->prepare(
-                'SELECT id, attempts, max_attempts
+                'SELECT id, lease_id, attempts, max_attempts
                  FROM email_queue
                  WHERE status = "processing"
                    AND (lease_expires_at < :lease_older_than OR (lease_expires_at IS NULL AND updated_at < :updated_older_than))' . $lockClause
@@ -572,7 +672,7 @@ final class EmailQueueRepository
                     'processing_timeout',
                     $error,
                     null,
-                    null,
+                    ['leaseId' => $row['lease_id']],
                     $now
                 );
             }
@@ -585,15 +685,18 @@ final class EmailQueueRepository
         }
     }
 
-    /** @return list<array{id: string, status: string, source_app: string}> */
+    /** @return list<array{id: string, status: string, source_app: string, attempts: int|string}> */
     private function claimWithSkipLocked(int $limit, string $agingCutoff): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT q.id, q.status, q.source_app
+            'SELECT q.id, q.status, q.source_app, q.attempts
              FROM email_queue q
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
              WHERE q.priority <> "technical"
-               AND (q.status = "pending" OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP))
+               AND (
+                   (q.status = "pending" AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= CURRENT_TIMESTAMP))
+                   OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP)
+               )
              ORDER BY (q.priority = "high" OR q.created_at <= :aging_cutoff) DESC, c.queue_credit DESC, q.created_at ASC
              LIMIT :limit
              FOR UPDATE SKIP LOCKED'
@@ -605,16 +708,19 @@ final class EmailQueueRepository
         return $stmt->fetchAll();
     }
 
-    /** @return list<array{id: string, status: string, source_app: string}> */
+    /** @return list<array{id: string, status: string, source_app: string, attempts: int|string}> */
     private function claimWithFallback(int $limit, string $agingCutoff): array
     {
         $lockClause = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' ? '' : ' FOR UPDATE';
         $stmt = $this->pdo->prepare(
-            'SELECT q.id, q.status, q.source_app
+            'SELECT q.id, q.status, q.source_app, q.attempts
              FROM email_queue q
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
              WHERE q.priority <> "technical"
-               AND (q.status = "pending" OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP))
+               AND (
+                   (q.status = "pending" AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= CURRENT_TIMESTAMP))
+                   OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP)
+               )
              ORDER BY (q.priority = "high" OR q.created_at <= :aging_cutoff) DESC, c.queue_credit DESC, q.created_at ASC
              LIMIT :limit' . $lockClause
         );
@@ -625,11 +731,11 @@ final class EmailQueueRepository
         return $stmt->fetchAll();
     }
 
-    /** @return list<array{id: string, status: string, source_app: string}> */
+    /** @return list<array{id: string, status: string, source_app: string, attempts: int|string}> */
     private function claimTechnicalWithSkipLocked(): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT q.id, q.status, q.source_app
+            'SELECT q.id, q.status, q.source_app, q.attempts
              FROM email_queue q
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
              WHERE q.priority = "technical"
@@ -640,7 +746,10 @@ final class EmailQueueRepository
                      AND older.status IN ("pending", "retry", "processing")
                      AND (older.created_at < q.created_at OR (older.created_at = q.created_at AND older.id < q.id))
                )
-               AND (q.status = "pending" OR q.next_attempt_at <= CURRENT_TIMESTAMP)
+               AND (
+                   (q.status = "pending" AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= CURRENT_TIMESTAMP))
+                   OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP)
+               )
              ORDER BY q.created_at ASC, q.id ASC
              LIMIT 1
              FOR UPDATE SKIP LOCKED'
@@ -650,12 +759,12 @@ final class EmailQueueRepository
         return $stmt->fetchAll();
     }
 
-    /** @return list<array{id: string, status: string, source_app: string}> */
+    /** @return list<array{id: string, status: string, source_app: string, attempts: int|string}> */
     private function claimTechnicalWithFallback(): array
     {
         $lockClause = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' ? '' : ' FOR UPDATE';
         $stmt = $this->pdo->prepare(
-            'SELECT q.id, q.status, q.source_app
+            'SELECT q.id, q.status, q.source_app, q.attempts
              FROM email_queue q
              INNER JOIN email_clients c ON c.source_app = q.source_app AND c.active = 1
              WHERE q.priority = "technical"
@@ -666,7 +775,10 @@ final class EmailQueueRepository
                      AND older.status IN ("pending", "retry", "processing")
                      AND (older.created_at < q.created_at OR (older.created_at = q.created_at AND older.id < q.id))
                )
-               AND (q.status = "pending" OR q.next_attempt_at <= CURRENT_TIMESTAMP)
+               AND (
+                   (q.status = "pending" AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= CURRENT_TIMESTAMP))
+                   OR (q.status = "retry" AND q.next_attempt_at <= CURRENT_TIMESTAMP)
+               )
              ORDER BY q.created_at ASC, q.id ASC
              LIMIT 1' . $lockClause
         );
@@ -675,19 +787,58 @@ final class EmailQueueRepository
         return $stmt->fetchAll();
     }
 
-    /** @param list<string> $ids */
-    private function setProcessing(array $ids, string $leaseId, string $leaseExpiresAt): void
+    /** @param list<array{id: string, attempts: int|string}> $claimed */
+    private function setProcessing(array $claimed, string $leaseId, string $leaseExpiresAt): void
     {
+        $ids = array_column($claimed, 'id');
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $stmt = $this->pdo->prepare(
             "UPDATE email_queue
              SET status = 'processing', lease_id = ?, lease_expires_at = ?, updated_at = ?
-             WHERE id IN ($placeholders) AND (status = 'pending' OR (status = 'retry' AND next_attempt_at <= CURRENT_TIMESTAMP))"
+             WHERE id IN ($placeholders)
+               AND (
+                   (status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP))
+                   OR (status = 'retry' AND next_attempt_at <= CURRENT_TIMESTAMP)
+               )"
         );
         $stmt->execute([$leaseId, $leaseExpiresAt, self::now(), ...$ids]);
-        foreach ($ids as $id) {
-            $this->insertEvent($id, 'processing', 'processing', 0, null, null, null, ['leaseId' => $leaseId]);
+        foreach ($claimed as $row) {
+            $this->insertEvent(
+                (string) $row['id'],
+                'processing',
+                'processing',
+                ((int) $row['attempts']) + 1,
+                null,
+                null,
+                null,
+                ['leaseId' => $leaseId, 'leaseExpiresAt' => $leaseExpiresAt]
+            );
         }
+    }
+
+    public function recordAttemptStarted(
+        string $id,
+        string $leaseId,
+        int $attempt,
+        string $queue,
+        string $workerId,
+        string $leaseExpiresAt
+    ): void {
+        $this->insertEvent(
+            $id,
+            'attempt_started',
+            'processing',
+            $attempt,
+            null,
+            null,
+            null,
+            [
+                'leaseId' => $leaseId,
+                'queue' => $queue,
+                'workerId' => $workerId,
+                'leaseExpiresAt' => $leaseExpiresAt,
+            ]
+        );
     }
 
     /** @param list<string> $ids @return list<array<string, mixed>> */
@@ -779,6 +930,101 @@ final class EmailQueueRepository
         $stmt->execute();
 
         return array_column($stmt->fetchAll(), 'email_id');
+    }
+
+    /** @return array<string, int> */
+    public function statusCountsForSourceApp(string $sourceApp): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT status, COUNT(*) AS count
+             FROM email_queue
+             WHERE source_app = :source_app
+             GROUP BY status'
+        );
+        $stmt->execute(['source_app' => $sourceApp]);
+        $counts = [
+            'pending' => 0,
+            'processing' => 0,
+            'retry' => 0,
+            'sent' => 0,
+            'failed' => 0,
+        ];
+        foreach ($stmt->fetchAll() as $row) {
+            $status = (string) $row['status'];
+            $counts[$status] = (int) $row['count'];
+        }
+
+        return $counts;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function oldestUnsentForSourceApp(string $sourceApp): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, status, priority, created_at, next_attempt_at, lease_expires_at, last_error
+             FROM email_queue
+             WHERE source_app = :source_app AND status <> "sent"
+             ORDER BY created_at ASC, id ASC
+             LIMIT 1'
+        );
+        $stmt->execute(['source_app' => $sourceApp]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    public function nextDelayedAttemptForSourceApp(string $sourceApp, string $now): ?string
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT MIN(next_attempt_at)
+             FROM email_queue
+             WHERE source_app = :source_app
+               AND status IN ("pending", "retry")
+               AND next_attempt_at IS NOT NULL
+               AND next_attempt_at > :now'
+        );
+        $stmt->execute(['source_app' => $sourceApp, 'now' => $now]);
+        $value = $stmt->fetchColumn();
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function technicalBlockerForSourceApp(string $sourceApp): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, status, created_at, next_attempt_at, lease_expires_at, last_error
+             FROM email_queue
+             WHERE source_app = :source_app
+               AND priority = "technical"
+               AND status IN ("pending", "processing", "retry")
+             ORDER BY created_at ASC, id ASC
+             LIMIT 1'
+        );
+        $stmt->execute(['source_app' => $sourceApp]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** @return array{rateLimitCount: int|null, rateLimitWindowMinutes: int|null}|null */
+    public function clientRateLimitForSourceApp(string $sourceApp): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT rate_limit_count, rate_limit_window_minutes
+             FROM email_clients
+             WHERE source_app = :source_app AND active = 1'
+        );
+        $stmt->execute(['source_app' => $sourceApp]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+
+        return [
+            'rateLimitCount' => $row['rate_limit_count'] === null ? null : (int) $row['rate_limit_count'],
+            'rateLimitWindowMinutes' => $row['rate_limit_window_minutes'] === null ? null : (int) $row['rate_limit_window_minutes'],
+        ];
     }
 
     private function addQueueCredits(): void
@@ -965,6 +1211,22 @@ final class EmailQueueRepository
         ]);
     }
 
+    /** @return array<string, mixed>|null */
+    private function latestEvent(string $emailId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT event_type, status, attempt, details, created_at
+             FROM email_events
+             WHERE email_id = :email_id
+             ORDER BY id DESC
+             LIMIT 1'
+        );
+        $stmt->execute(['email_id' => $emailId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
     /** @param array<string, mixed> $data */
     private static function requestHash(array $data, ?string $metadata): string
     {
@@ -1050,7 +1312,11 @@ final class EmailQueueRepository
     private static function statusSelectSql(): string
     {
         return 'SELECT q.id, q.status, q.source_app, q.recipient_email, COALESCE(q.subject, m.subject) AS subject, q.priority,
-                    q.attempts, q.last_error, q.provider_message_id, q.created_at, q.updated_at, q.sent_at, q.batch_id';
+                    q.attempts, q.next_attempt_at, q.lease_expires_at, q.last_error, q.provider_message_id,
+                    q.created_at, q.updated_at, q.sent_at, q.batch_id,
+                    (SELECT e.event_type FROM email_events e WHERE e.email_id = q.id ORDER BY e.id DESC LIMIT 1) AS last_event_type,
+                    (SELECT e.created_at FROM email_events e WHERE e.email_id = q.id ORDER BY e.id DESC LIMIT 1) AS last_event_at,
+                    (SELECT COUNT(*) FROM email_events e WHERE e.email_id = q.id AND e.event_type = "attempt_started") AS send_attempts';
     }
 
 }

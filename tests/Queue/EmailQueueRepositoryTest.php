@@ -238,6 +238,27 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
         self::assertSame('pending', $this->fetchQueueRow($technicalId)['status']);
     }
 
+    public function testPendingEmailWithFutureNextAttemptIsNotClaimed(): void
+    {
+        $delayedId = $this->insertQueueRow([
+            'id' => 'pending-delayed',
+            'status' => 'pending',
+            'next_attempt_at' => '2099-01-01 00:00:00',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $readyId = $this->insertQueueRow([
+            'id' => 'pending-ready',
+            'status' => 'pending',
+            'next_attempt_at' => null,
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+
+        $claimed = $this->repository->claimBatch(20, 300, 900);
+
+        self::assertSame([$readyId], array_column($claimed, 'id'));
+        self::assertSame('pending', $this->fetchQueueRow($delayedId)['status']);
+    }
+
     public function testTechnicalQueueClaimsOldestEmailInFifoOrder(): void
     {
         $oldestId = $this->insertQueueRow([

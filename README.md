@@ -142,11 +142,24 @@ Then add API enqueue rate limiting:
 mysql -u root -p central_mailer < database/migrations/005_add_enqueue_rate_limit.sql
 ```
 
+Then add inline attachment content IDs:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/006_add_inline_attachment_content_id.sql
+```
+
+Then add worker heartbeats and queue observability indexes:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/007_add_worker_heartbeats_observability.sql
+```
+
 The deploy workflow uses the migration runner instead of invoking SQL files manually:
 
 ```bash
 php scripts/run-migrations.php
 php scripts/run-migrations.php --dry-run
+php scripts/run-migrations.php --adopt-existing
 php scripts/run-migrations.php --baseline
 php scripts/run-migrations.php --baseline --baseline-through=004_add_technical_priority.sql
 ```
@@ -154,6 +167,9 @@ php scripts/run-migrations.php --baseline --baseline-through=004_add_technical_p
 Use `--baseline` once for an existing database that already has the current schema but does not have the
 `schema_migrations` table. Use `--baseline-through` when the database has an older known schema and newer migration
 files must still be executed normally. Use the normal command for a new empty database and for later deployments.
+Use `--adopt-existing` when a database was migrated manually before `schema_migrations` existed, or when a first
+tracked migration run stopped on duplicate columns/tables. It records only migrations whose expected tables/columns
+are already present, then runs the remaining migrations normally.
 
 Example client configuration:
 
@@ -324,6 +340,8 @@ An application can read only its own messages. The `app-a` API key will not see 
 
 Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and provider acceptance.
 
+Operational diagnostics are available at `GET /emails/diagnostics`. The endpoint is authenticated per client and returns status counts, the oldest unsent message, the nearest delayed retry/rate-limit timestamp, the technical FIFO blocker, rate-limit usage, and fresh worker heartbeats.
+
 Run retention cleanup periodically after attachments have been cleaned by workers:
 
 ```cron
@@ -338,6 +356,8 @@ Run retention cleanup periodically after attachments have been cleaned by worker
 - `retry` - sending failed, but it will be retried after `next_attempt_at`.
 - `failed` - `max_attempts` was exceeded.
 
+Status responses also include diagnostic fields: `nextAttemptAt`, `leaseExpiresAt`, `delayReason`, `delayUntil`, `queueAgeSeconds`, `processingAgeSeconds`, `failedAttempts`, `sendAttempts`, `lastEventType`, and `lastEventAt`. `attempts` remains the number of failed attempts for compatibility; `sendAttempts` counts durable `attempt_started` events.
+
 ## Worker, retry, and ordering
 
 The worker fetches a batch limited by `EMAIL_WORKER_BATCH_SIZE` and the rate limits. Scheduling uses:
@@ -350,11 +370,11 @@ Normal messages older than `EMAIL_PRIORITY_AGING_SECONDS` receive effective high
 
 The technical worker ignores client weights and priority aging. It sends only the oldest non-terminal `technical` message. A retry scheduled for that oldest message blocks later technical messages until it is sent, permanently failed, or moved to the standard queue.
 
-When `TECHNICAL_EMAIL_FALLBACK_TO_STANDARD=true`, a technical message that exhausts its Gmail SMTP attempts changes from `technical` to `normal`, returns to `pending`, and receives a fresh attempt budget in the standard SMTP queue. The event history records `technical_fallback` and preserves the Gmail SMTP error in `lastError`. This fallback requires a running technical worker; it cannot detect that the technical worker process itself is stopped.
+When `TECHNICAL_EMAIL_FALLBACK_TO_STANDARD=true`, a technical message that exhausts its Gmail SMTP attempts changes from `technical` to `normal`, returns to `pending`, and receives a fresh attempt budget in the standard SMTP queue. The event history records `technical_fallback` and preserves the Gmail SMTP error in `lastError`. This fallback requires a running technical worker; `/health` and `GET /emails/diagnostics` expose stale or missing technical worker heartbeats.
 
 For MySQL/MariaDB versions that support `SELECT ... FOR UPDATE SKIP LOCKED`, the worker uses that mechanism. If the database does not support it, the fallback uses transactional `FOR UPDATE`, which is safe but can block parallel workers. Each claimed message receives a processing lease, so a delayed worker cannot overwrite a status written by a newer worker.
 
-Retry uses exponential backoff: 60s, 120s, 240s, 480s, up to a maximum of 3600s.
+Retry uses exponential backoff: 60s, 120s, 240s, 480s, up to a maximum of 3600s. Worker heartbeats are stored in `email_worker_heartbeats`; `/health` returns `degraded` when it cannot see fresh standard and technical worker heartbeats.
 
 ## Gmail SMTP authorization and delivery feedback
 
@@ -371,7 +391,7 @@ EMAIL_RATE_LIMIT_COUNT=100
 EMAIL_RATE_LIMIT_WINDOW_MINUTES=15
 ```
 
-Before each send attempt, the worker atomically reserves a rate-limit slot in the database. Reservations are serialized across all workers and count for the configured rolling window, including failed or uncertain SMTP attempts. If the limit is reached, the claimed message is returned to the queue without increasing its attempt count.
+Before each send attempt, the worker atomically reserves a rate-limit slot in the database. Reservations are serialized across all workers and count for the configured rolling window, including failed or uncertain SMTP attempts. If the limit is reached, the claimed message is returned to the queue with `next_attempt_at` set to the next usable window, without increasing its failed attempt count.
 
 Each `email_clients` row can also define `rate_limit_count` and `rate_limit_window_minutes`. A client that reaches its own limit does not consume the remaining capacity of other clients.
 
@@ -383,7 +403,7 @@ Logs are written to:
 - `storage/logs/worker-YYYY-MM-DD.log`
 - `storage/logs/technical-worker-YYYY-MM-DD.log`
 
-Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, and rate limiting. Persistent event history is stored in `email_events`. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
+Technical events are logged: queued messages, idempotent replays, send attempts, success, errors, attempt count, final status, rate limiting, processing timeouts, and lease reconciliation after late provider acceptance. Persistent event history is stored in `email_events`. SMTP passwords, full HTML bodies, and metadata are not logged. `SMTP_DEBUG_LEVEL` defaults to `0`; enabling SMTP debug can expose message content and must not be used in production.
 
 ## CyberFolks/SeoHost SMTP configuration
 
@@ -458,6 +478,9 @@ Create a second service with `ExecStart=/usr/bin/php bin/technical-worker.php` a
 The workflow in `.github/workflows/deploy.yml` deploys the API to the `staging` or `production` GitHub
 environment. A push to `main` or `master` deploys to staging with migrations enabled. A production deploy
 must be started manually with `confirm_production=DEPLOY_PRODUCTION`.
+For a target database that was migrated manually or failed on duplicate columns/tables during migration adoption,
+run the workflow manually with `migration_mode=adopt-existing`. That mode runs
+`php scripts/run-migrations.php --adopt-existing` on the release and then continues the deploy.
 
 Configure these secrets separately in both GitHub environments:
 

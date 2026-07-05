@@ -109,7 +109,7 @@ HTML;
                     'get' => [
                         'tags' => ['System'],
                         'summary' => 'Sprawdza dostepnosc API i bazy danych',
-                        'description' => 'Publiczny health check. Zwraca sukces tylko wtedy, gdy API moze wykonac zapytanie do bazy danych.',
+                        'description' => 'Publiczny health check. Zwraca `degraded`, gdy API dziala, ale nie widzi swiezych heartbeatow standardowego albo technicznego workera.',
                         'operationId' => 'getHealth',
                         'security' => [],
                         'responses' => [
@@ -118,7 +118,7 @@ HTML;
                                 'content' => [
                                     'application/json' => [
                                         'schema' => ['$ref' => '#/components/schemas/HealthResponse'],
-                                        'example' => ['status' => 'ok', 'apiVersion' => ApiVersion::VERSION],
+                                        'example' => ['status' => 'degraded', 'apiVersion' => ApiVersion::VERSION, 'checks' => ['database' => 'ok', 'attachments' => 'writable', 'workers' => 'degraded']],
                                     ],
                                 ],
                             ],
@@ -206,6 +206,22 @@ HTML;
                             '200' => [
                                 'description' => 'Lista wiadomosci niewyslanych.',
                                 'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailUnsentListResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
+                '/emails/diagnostics' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Pokazuje diagnostyke kolejki i workerow',
+                        'description' => 'Zwraca chroniony, per-klientowy widok backlogu, wykorzystania limitow wysylki i swiezosci heartbeatow workerow. Szczegoly sa dostepne tylko dla aplikacji rozpoznanej po kluczu API.',
+                        'operationId' => 'getEmailDiagnostics',
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Diagnostyka kolejki klienta.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailDiagnosticsResponse']]],
                             ],
                             '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
                             '500' => ['$ref' => '#/components/responses/InternalServerError'],
@@ -421,16 +437,20 @@ HTML;
                 'schemas' => [
                     'HealthResponse' => [
                         'type' => 'object',
-                        'required' => ['status', 'apiVersion'],
+                        'required' => ['status', 'apiVersion', 'checks'],
                         'properties' => [
                             'status' => [
                                 'type' => 'string',
-                                'enum' => ['ok'],
+                                'enum' => ['ok', 'degraded'],
                                 'example' => 'ok',
                             ],
                             'apiVersion' => [
                                 'type' => 'string',
                                 'example' => ApiVersion::VERSION,
+                            ],
+                            'checks' => [
+                                'type' => 'object',
+                                'additionalProperties' => ['type' => 'string'],
                             ],
                         ],
                     ],
@@ -625,6 +645,34 @@ HTML;
                             ],
                         ],
                     ],
+                    'EmailDiagnosticsResponse' => [
+                        'type' => 'object',
+                        'required' => ['sourceApp', 'generatedAt', 'statusCounts', 'backlog', 'rateLimit', 'workers'],
+                        'properties' => [
+                            'sourceApp' => ['type' => 'string'],
+                            'generatedAt' => ['type' => 'string', 'format' => 'date-time'],
+                            'statusCounts' => [
+                                'type' => 'object',
+                                'additionalProperties' => ['type' => 'integer'],
+                                'description' => 'Liczba wiadomosci klienta w kazdym statusie kolejki.',
+                            ],
+                            'backlog' => [
+                                'type' => 'object',
+                                'additionalProperties' => true,
+                                'description' => 'Najstarszy niewyslany rekord, najblizszy opozniony retry/rate limit oraz ewentualny techniczny rekord blokujacy FIFO.',
+                            ],
+                            'rateLimit' => [
+                                'type' => 'object',
+                                'additionalProperties' => true,
+                                'description' => 'Biezace wykorzystanie globalnego i per-klientowego rolling window.',
+                            ],
+                            'workers' => [
+                                'type' => 'object',
+                                'additionalProperties' => true,
+                                'description' => 'Swiezosc heartbeatow workerow standardowych i technicznych.',
+                            ],
+                        ],
+                    ],
                     'WorkerRunResponse' => [
                         'type' => 'object',
                         'required' => ['status', 'queue'],
@@ -655,7 +703,7 @@ HTML;
                     'EmailStatusResponse' => [
                         'type' => 'object',
                         'description' => 'Biezacy stan wiadomosci. Pola nullable sa zawsze zwracane, ale moga nie miec jeszcze wartosci.',
-                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'lastError', 'providerMessageId', 'createdAt', 'updatedAt', 'sentAt', 'batchId'],
+                        'required' => ['id', 'status', 'sourceApp', 'to', 'subject', 'priority', 'attempts', 'failedAttempts', 'sendAttempts', 'nextAttemptAt', 'leaseExpiresAt', 'delayReason', 'delayUntil', 'queueAgeSeconds', 'processingAgeSeconds', 'lastEventType', 'lastEventAt', 'lastError', 'providerMessageId', 'createdAt', 'updatedAt', 'sentAt', 'batchId'],
                         'properties' => [
                             'id' => [
                                 'type' => 'string',
@@ -688,6 +736,58 @@ HTML;
                                 'minimum' => 0,
                                 'description' => 'Liczba zakonczonych niepowodzeniem prob wysylki w aktualnej kolejce.',
                             ],
+                            'failedAttempts' => [
+                                'type' => 'integer',
+                                'minimum' => 0,
+                                'description' => 'Alias diagnostyczny dla `attempts`: liczba nieudanych prob.',
+                            ],
+                            'sendAttempts' => [
+                                'type' => 'integer',
+                                'minimum' => 0,
+                                'description' => 'Liczba faktycznie rozpoczetych prob wysylki zarejestrowanych zdarzeniem `attempt_started`.',
+                            ],
+                            'nextAttemptAt' => [
+                                'type' => 'string',
+                                'format' => 'date-time',
+                                'nullable' => true,
+                                'description' => 'Najblizszy czas, po ktorym worker moze ponownie claimowac wiadomosc.',
+                            ],
+                            'leaseExpiresAt' => [
+                                'type' => 'string',
+                                'format' => 'date-time',
+                                'nullable' => true,
+                                'description' => 'Koniec aktualnej dzierzawy przetwarzania, gdy status to `processing`.',
+                            ],
+                            'delayReason' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'description' => 'Powod czekania, np. `rate_limited`, `retry_backoff`, `awaiting_worker`, `processing` albo `stale_processing`.',
+                            ],
+                            'delayUntil' => [
+                                'type' => 'string',
+                                'format' => 'date-time',
+                                'nullable' => true,
+                                'description' => 'Czas konca znanego opoznienia, jezeli istnieje.',
+                            ],
+                            'queueAgeSeconds' => [
+                                'type' => 'integer',
+                                'nullable' => true,
+                                'minimum' => 0,
+                            ],
+                            'processingAgeSeconds' => [
+                                'type' => 'integer',
+                                'nullable' => true,
+                                'minimum' => 0,
+                            ],
+                            'lastEventType' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                            ],
+                            'lastEventAt' => [
+                                'type' => 'string',
+                                'format' => 'date-time',
+                                'nullable' => true,
+                            ],
                             'lastError' => [
                                 'type' => 'string',
                                 'nullable' => true,
@@ -696,7 +796,7 @@ HTML;
                             'providerMessageId' => [
                                 'type' => 'string',
                                 'nullable' => true,
-                                'description' => 'Stabilny SMTP Message-ID po przyjeciu wiadomosci przez provider.',
+                                'description' => 'Stabilny SMTP Message-ID po przyjeciu wiadomosci przez provider. Nie jest to potwierdzenie finalnego dostarczenia do skrzynki odbiorcy.',
                             ],
                             'createdAt' => [
                                 'type' => 'string',
@@ -761,7 +861,7 @@ HTML;
                         'properties' => [
                             'type' => [
                                 'type' => 'string',
-                                'enum' => ['queued', 'processing', 'rate_limited', 'retry', 'failed', 'sent', 'technical_fallback', 'processing_timeout'],
+                                'enum' => ['queued', 'processing', 'attempt_started', 'rate_limited', 'retry', 'failed', 'sent', 'technical_fallback', 'processing_timeout', 'lease_lost_provider_accepted'],
                                 'description' => 'Rodzaj zdarzenia. Lista moze zostac rozszerzona w kolejnych wersjach API.',
                             ],
                             'status' => [

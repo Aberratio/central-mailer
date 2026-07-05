@@ -82,6 +82,7 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame('pending', $row['status']);
         self::assertNull($row['lease_id']);
         self::assertSame(0, $row['attempts']);
+        self::assertNotNull($row['next_attempt_at']);
     }
 
     public function testSendsAttachmentRecordsEventAndCleansLocalFile(): void
@@ -262,6 +263,40 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame('pending', $third['status']);
         self::assertNull($third['lease_id']);
         self::assertSame(0, $third['attempts']);
+        self::assertNotNull($third['next_attempt_at']);
+    }
+
+    public function testClientRateLimitDoesNotBlockOtherClientsInClaimedBatch(): void
+    {
+        $this->pdo->exec("UPDATE email_clients SET rate_limit_count = 1, rate_limit_window_minutes = 15 WHERE source_app = 'app-a'");
+        $firstAppA = $this->insertQueueRow(['id' => 'app-a-first', 'source_app' => 'app-a', 'created_at' => '2026-01-01 10:00:00']);
+        $secondAppA = $this->insertQueueRow(['id' => 'app-a-second', 'source_app' => 'app-a', 'created_at' => '2026-01-01 10:01:00']);
+        $appB = $this->insertQueueRow(['id' => 'app-b-first', 'source_app' => 'app-b', 'created_at' => '2026-01-01 10:02:00']);
+        $provider = new class implements EmailProviderInterface {
+            /** @var list<string> */
+            public array $sentIds = [];
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sentIds[] = $message->id;
+
+                return new EmailSendResult('<' . $message->id . '@mailer.test>');
+            }
+        };
+
+        $processed = $this->worker($provider, 'standard', [
+            'EMAIL_WORKER_BATCH_SIZE' => '3',
+            'EMAIL_RATE_LIMIT_COUNT' => '10',
+        ])->runOnce();
+
+        self::assertSame(2, $processed);
+        self::assertSame([$firstAppA, $appB], $provider->sentIds);
+        self::assertSame('sent', $this->fetchQueueRow($firstAppA)['status']);
+        self::assertSame('sent', $this->fetchQueueRow($appB)['status']);
+
+        $limited = $this->fetchQueueRow($secondAppA);
+        self::assertSame('pending', $limited['status']);
+        self::assertNotNull($limited['next_attempt_at']);
     }
 
     public function testAppliesGlobalBrandingBeforeSending(): void
@@ -454,6 +489,36 @@ final class EmailWorkerTest extends DatabaseTestCase
         $row = $this->fetchQueueRow($technicalId);
         self::assertSame('technical', $row['priority']);
         self::assertSame('failed', $row['status']);
+    }
+
+    public function testProviderAcceptanceAfterProcessingTimeoutIsReconciledToSent(): void
+    {
+        $id = $this->insertQueueRow(['id' => 'lease-reconcile']);
+        $repository = $this->repository;
+        $provider = new class($repository) implements EmailProviderInterface {
+            public function __construct(private readonly \CentralMailer\Queue\EmailQueueRepository $repository)
+            {
+            }
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->repository->releaseStaleProcessing(
+                    '2099-01-01 00:00:00',
+                    'Email processing timed out during provider send'
+                );
+
+                return new EmailSendResult('<accepted-after-timeout@mailer.test>');
+            }
+        };
+
+        $this->worker($provider, 'standard', ['EMAIL_WORKER_BATCH_SIZE' => '1'])->runOnce();
+
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('sent', $row['status']);
+        self::assertSame('<accepted-after-timeout@mailer.test>', $row['provider_message_id']);
+        self::assertSame(1, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '$id' AND event_type = 'lease_lost_provider_accepted'"
+        )->fetchColumn());
     }
 
     /**

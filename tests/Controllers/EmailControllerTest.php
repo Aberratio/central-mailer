@@ -7,6 +7,8 @@ namespace CentralMailer\Tests\Controllers;
 use CentralMailer\Config\Env;
 use CentralMailer\Controllers\EmailController;
 use CentralMailer\Queue\EmailQueueService;
+use CentralMailer\Queue\RateLimitRepository;
+use CentralMailer\Queue\WorkerHeartbeatRepository;
 use CentralMailer\Tests\Support\DatabaseTestCase;
 use CentralMailer\Validation\EmailRequestValidator;
 use Psr\Log\NullLogger;
@@ -44,6 +46,41 @@ final class EmailControllerTest extends DatabaseTestCase
         self::assertSame('accepted', $payload['providerAcceptanceStatus']);
         self::assertSame('unknown', $payload['deliveryStatus']);
         self::assertSame('normal', $payload['priority']);
+    }
+
+    public function testShowIncludesOperationalDelayAndLastEventDetails(): void
+    {
+        $id = $this->insertQueueRow([
+            'status' => 'pending',
+            'next_attempt_at' => '2099-01-01 00:00:00',
+            'lease_expires_at' => null,
+            'attempts' => 1,
+        ]);
+        $this->pdo->prepare(
+            'INSERT INTO email_events
+             (email_id, event_type, status, attempt, error_code, error_message, provider_message_id, details, created_at)
+             VALUES
+             (:email_id, "attempt_started", "processing", 1, NULL, NULL, NULL, NULL, "2026-01-01 10:01:00"),
+             (:email_id, "rate_limited", "pending", 2, "global", NULL, NULL, :details, "2026-01-01 10:02:00")'
+        )->execute([
+            'email_id' => $id,
+            'details' => json_encode(['reason' => 'global', 'retryAfter' => '2099-01-01 00:00:00'], JSON_THROW_ON_ERROR),
+        ]);
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/emails/' . $id)
+            ->withAttribute('sourceApp', 'app-a');
+
+        $response = $this->controller()->show($request, new Response(), ['id' => $id]);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame('2099-01-01 00:00:00', $payload['nextAttemptAt']);
+        self::assertSame('rate_limited', $payload['delayReason']);
+        self::assertSame('2099-01-01 00:00:00', $payload['delayUntil']);
+        self::assertSame(1, $payload['failedAttempts']);
+        self::assertSame(1, $payload['sendAttempts']);
+        self::assertSame('rate_limited', $payload['lastEventType']);
+        self::assertSame('2026-01-01 10:02:00', $payload['lastEventAt']);
+        self::assertIsInt($payload['queueAgeSeconds']);
     }
 
     public function testCreateReplaysRequestWithSameIdempotencyKey(): void
@@ -337,6 +374,59 @@ final class EmailControllerTest extends DatabaseTestCase
         self::assertSame('in_progress', $payload['deliveryStatus']);
         self::assertSame('accepted', $payload['emails'][0]['providerAcceptanceStatus']);
         self::assertSame('unknown', $payload['emails'][0]['deliveryStatus']);
+    }
+
+    public function testDiagnosticsReturnsBacklogRateLimitAndWorkerState(): void
+    {
+        $this->insertQueueRow([
+            'id' => 'diagnostics-pending',
+            'status' => 'pending',
+            'created_at' => '2026-01-01 09:00:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'diagnostics-technical',
+            'priority' => 'technical',
+            'status' => 'retry',
+            'next_attempt_at' => '2099-01-01 00:00:00',
+            'created_at' => '2026-01-01 08:00:00',
+        ]);
+        $env = new Env([
+            'EMAIL_RATE_LIMIT_COUNT' => '10',
+            'EMAIL_RATE_LIMIT_WINDOW_MINUTES' => '15',
+            'EMAIL_WORKER_HEARTBEAT_STALE_SECONDS' => '60',
+        ]);
+        $heartbeatRepository = new WorkerHeartbeatRepository($this->pdo);
+        $heartbeatRepository->beat('standard:test', 'standard');
+        $controller = new EmailController(
+            new EmailQueueService(
+                $this->repository,
+                new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false'])),
+                new NullLogger(),
+                $this->attachmentStorage
+            ),
+            $this->repository,
+            null,
+            new RateLimitRepository($this->pdo),
+            $heartbeatRepository,
+            $env
+        );
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/emails/diagnostics')
+            ->withAttribute('sourceApp', 'app-a');
+
+        $response = $controller->diagnostics($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('app-a', $payload['sourceApp']);
+        self::assertSame(1, $payload['statusCounts']['pending']);
+        self::assertSame(1, $payload['statusCounts']['retry']);
+        self::assertSame('diagnostics-technical', $payload['backlog']['oldestUnsent']['id']);
+        self::assertSame('2099-01-01 00:00:00', $payload['backlog']['nextDelayedAt']);
+        self::assertSame('diagnostics-technical', $payload['backlog']['technicalBlocker']['id']);
+        self::assertSame(0, $payload['rateLimit']['global']['used']);
+        self::assertTrue($payload['workers']['standardActive']);
+        self::assertFalse($payload['workers']['technicalActive']);
     }
 
     public function testCreateStoresTechnicalPriority(): void
