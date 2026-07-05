@@ -289,6 +289,31 @@ jobs:
             printf '%s' "$line"
           }
 
+          check_health() {
+            local url="${API_URL%/}/health"
+            local attempts="${1:-12}"
+            local delay_seconds="${2:-5}"
+            local attempt
+
+            attempt=1
+            while [ "$attempt" -le "$attempts" ]; do
+              if curl --fail --show-error --silent --location --connect-timeout 5 --max-time 15 "$url"; then
+                printf '\nHealth check passed on attempt %s/%s.\n' "$attempt" "$attempts"
+                return 0
+              fi
+
+              if [ "$attempt" -lt "$attempts" ]; then
+                printf 'Health check failed on attempt %s/%s; retrying in %ss.\n' "$attempt" "$attempts" "$delay_seconds" >&2
+                sleep "$delay_seconds"
+              fi
+
+              attempt=$((attempt + 1))
+            done
+
+            printf 'Health check failed after %s attempts.\n' "$attempts" >&2
+            return 1
+          }
+
           DB_HOST="$(get_env DB_HOST)"
           DB_PORT="$(get_env DB_PORT)"
           DB_DATABASE="$(get_env DB_DATABASE)"
@@ -509,7 +534,7 @@ jobs:
             mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/public-$DEPLOY_ID" "$PUBLIC_HTML"
           fi
 
-          if ! curl --fail --show-error --location "${API_URL%/}/health"; then
+          if ! check_health 12 5; then
             if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
               ln -s "$PREVIOUS_RELEASE" "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-current-$DEPLOY_ID"
               mv -Tf "$BACKEND_REMOTE_DIR_REAL/.deploy/rollback-current-$DEPLOY_ID" "$BACKEND_REMOTE_DIR_REAL/current"
@@ -545,4 +570,21 @@ jobs:
             echo "API_URL is required."
             exit 40
           fi
-          curl --fail --show-error --location "${API_URL%/}/health"
+          health_url="${API_URL%/}/health"
+          attempt=1
+          while [ "$attempt" -le 12 ]; do
+            if curl --fail --show-error --silent --location --connect-timeout 5 --max-time 15 "$health_url"; then
+              printf '\nHealth check passed on attempt %s/12.\n' "$attempt"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 12 ]; then
+              echo "Health check failed on attempt $attempt/12; retrying in 5s." >&2
+              sleep 5
+            fi
+
+            attempt=$((attempt + 1))
+          done
+
+          echo "Health check failed after 12 attempts." >&2
+          exit 40
