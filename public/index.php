@@ -4,17 +4,21 @@ declare(strict_types=1);
 
 use CentralMailer\Config\Env;
 use CentralMailer\Config\ProductionConfigValidator;
+use CentralMailer\Controllers\AdminController;
+use CentralMailer\Controllers\EmailController;
 use CentralMailer\Client\ClientRepository;
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Database\Connection;
 use CentralMailer\Email\EmailProviderInterface;
 use CentralMailer\Email\SmtpEmailProvider;
 use CentralMailer\Http\ErrorMiddleware;
+use CentralMailer\Http\Middleware\AdminKeyAuthMiddleware;
 use CentralMailer\Http\Middleware\ApiKeyAuthMiddleware;
 use CentralMailer\Http\Middleware\CorsMiddleware;
 use CentralMailer\Http\Middleware\EnqueueRateLimitMiddleware;
 use CentralMailer\Http\Middleware\RequestSizeLimitMiddleware;
 use CentralMailer\Http\Middleware\SecurityHeadersMiddleware;
+use CentralMailer\Http\Routes\AdminRoutes;
 use CentralMailer\Http\Routes\EmailRoutes;
 use CentralMailer\Http\Routes\HealthRoutes;
 use CentralMailer\Http\Routes\OpenApiRoutes;
@@ -78,6 +82,14 @@ $container->set(EmailController::class, fn ($c) => new EmailController(
     $c->get(WorkerHeartbeatRepository::class),
     $c->get(Env::class)
 ));
+$container->set(AdminController::class, fn ($c) => new AdminController(
+    $c->get(PDO::class),
+    $c->get(AttachmentStorage::class),
+    $c->get(EmailQueueRepository::class),
+    $c->get(RateLimitRepository::class),
+    $c->get(WorkerHeartbeatRepository::class),
+    $c->get(Env::class)
+));
 $container->set(EmailProviderInterface::class, fn ($c) => new SmtpEmailProvider($c->get(Env::class)));
 $container->set(EmailWorker::class, fn ($c) => new EmailWorker(
     $c->get(EmailQueueRepository::class),
@@ -102,12 +114,14 @@ $app->add(new EnqueueRateLimitMiddleware(
     $container->get(Env::class)
 ));
 $app->add(new ApiKeyAuthMiddleware($container->get(ClientRepository::class), $container->get(Env::class)));
+$app->add(new AdminKeyAuthMiddleware($container->get(Env::class)));
 $app->add(new CorsMiddleware($container->get(Env::class)));
 $app->add(new SecurityHeadersMiddleware($container->get(Env::class)));
 ErrorMiddleware::create($app, $container->get(Env::class), $container->get(LoggerInterface::class));
 
 OpenApiRoutes::register($app);
 HealthRoutes::register($app);
+AdminRoutes::register($app);
 EmailRoutes::register($app);
 
 $app->run();

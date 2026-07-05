@@ -44,6 +44,7 @@ final class ProductionConfigValidatorTest extends TestCase
             'GMAIL_SMTP_SECURE' => 'tls',
             'SMTP_DEBUG_LEVEL' => '0',
             'API_KEY_APP_A' => str_repeat('a', 32),
+            'ADMIN_API_KEY' => str_repeat('c', 32),
         ]));
 
         self::assertTrue(true);

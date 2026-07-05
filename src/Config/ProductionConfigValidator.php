@@ -46,6 +46,9 @@ final class ProductionConfigValidator
         if ($env->bool('APP_DOCS_ENABLED', true)) {
             $errors[] = 'APP_DOCS_ENABLED must be false';
         }
+        if (strlen($env->string('ADMIN_API_KEY', '')) < 32) {
+            $errors[] = 'ADMIN_API_KEY must contain at least 32 characters';
+        }
 
         self::validateSecureTransport($env, 'SMTP_SECURE', $errors);
         self::validateSecureTransport($env, 'GMAIL_SMTP_SECURE', $errors);
