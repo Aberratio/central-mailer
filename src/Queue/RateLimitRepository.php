@@ -17,13 +17,15 @@ final class RateLimitRepository
         string $sourceApp,
         int $limit,
         string $since,
+        int $windowMinutes,
         ?int $clientLimit,
         string $clientSince,
+        int $clientWindowMinutes,
         string $cleanupSince
-    ): bool
+    ): RateLimitDecision
     {
         if ($limit <= 0) {
-            return false;
+            return RateLimitDecision::denied('global', self::retryAfter(self::now(), max(1, $windowMinutes)), 0, $limit);
         }
 
         $now = self::now();
@@ -46,9 +48,14 @@ final class RateLimitRepository
             $countStmt->execute(['since' => $since]);
             $count = (int) $countStmt->fetchColumn();
             if ($count >= $limit) {
+                $retryAfter = $this->retryAfterForWindow(
+                    'SELECT MIN(reserved_at) FROM email_rate_limit_reservations WHERE reserved_at >= :since',
+                    ['since' => $since],
+                    $windowMinutes
+                );
                 $this->pdo->commit();
 
-                return false;
+                return RateLimitDecision::denied('global', $retryAfter, $count, $limit);
             }
 
             if ($clientLimit !== null) {
@@ -60,10 +67,18 @@ final class RateLimitRepository
                     'source_app' => $sourceApp,
                     'client_since' => $clientSince,
                 ]);
-                if ((int) $clientCountStmt->fetchColumn() >= $clientLimit) {
+                $clientCount = (int) $clientCountStmt->fetchColumn();
+                if ($clientCount >= $clientLimit) {
+                    $retryAfter = $this->retryAfterForWindow(
+                        'SELECT MIN(reserved_at)
+                         FROM email_rate_limit_reservations
+                         WHERE source_app = :source_app AND reserved_at >= :client_since',
+                        ['source_app' => $sourceApp, 'client_since' => $clientSince],
+                        $clientWindowMinutes
+                    );
                     $this->pdo->commit();
 
-                    return false;
+                    return RateLimitDecision::denied('client', $retryAfter, $clientCount, $clientLimit);
                 }
             }
 
@@ -78,7 +93,7 @@ final class RateLimitRepository
             ]);
             $this->pdo->commit();
 
-            return true;
+            return RateLimitDecision::allowed($count + 1, $limit);
         } catch (\Throwable $exception) {
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
@@ -88,9 +103,80 @@ final class RateLimitRepository
         }
     }
 
+    /** @return array{used: int, limit: int, remaining: int, retryAfter: string|null} */
+    public function globalUsage(int $limit, string $since, int $windowMinutes): array
+    {
+        $countStmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM email_rate_limit_reservations WHERE reserved_at >= :since'
+        );
+        $countStmt->execute(['since' => $since]);
+        $used = (int) $countStmt->fetchColumn();
+
+        return [
+            'used' => $used,
+            'limit' => $limit,
+            'remaining' => max(0, $limit - $used),
+            'retryAfter' => $used >= $limit
+                ? $this->retryAfterForWindow(
+                    'SELECT MIN(reserved_at) FROM email_rate_limit_reservations WHERE reserved_at >= :since',
+                    ['since' => $since],
+                    $windowMinutes
+                )
+                : null,
+        ];
+    }
+
+    /** @return array{used: int, limit: int|null, remaining: int|null, retryAfter: string|null} */
+    public function clientUsage(string $sourceApp, ?int $limit, string $since, int $windowMinutes): array
+    {
+        $countStmt = $this->pdo->prepare(
+            'SELECT COUNT(*)
+             FROM email_rate_limit_reservations
+             WHERE source_app = :source_app AND reserved_at >= :since'
+        );
+        $countStmt->execute(['source_app' => $sourceApp, 'since' => $since]);
+        $used = (int) $countStmt->fetchColumn();
+
+        return [
+            'used' => $used,
+            'limit' => $limit,
+            'remaining' => $limit === null ? null : max(0, $limit - $used),
+            'retryAfter' => $limit !== null && $used >= $limit
+                ? $this->retryAfterForWindow(
+                    'SELECT MIN(reserved_at)
+                     FROM email_rate_limit_reservations
+                     WHERE source_app = :source_app AND reserved_at >= :since',
+                    ['source_app' => $sourceApp, 'since' => $since],
+                    $windowMinutes
+                )
+                : null,
+        ];
+    }
+
     private static function now(): string
     {
         return (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+    }
+
+    /** @param array<string, mixed> $params */
+    private function retryAfterForWindow(string $sql, array $params, int $windowMinutes): string
+    {
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        $oldest = $stmt->fetchColumn();
+        if (!is_string($oldest) || $oldest === '') {
+            return self::retryAfter(self::now(), max(1, $windowMinutes));
+        }
+
+        return self::retryAfter($oldest, max(1, $windowMinutes));
+    }
+
+    private static function retryAfter(string $from, int $windowMinutes): string
+    {
+        return (new \DateTimeImmutable($from))
+            ->modify(sprintf('+%d minutes', $windowMinutes))
+            ->modify('+1 second')
+            ->format('Y-m-d H:i:s');
     }
 
 }

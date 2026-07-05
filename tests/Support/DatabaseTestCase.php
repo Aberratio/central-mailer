@@ -206,5 +206,19 @@ abstract class DatabaseTestCase extends TestCase
                 reserved_at TEXT NOT NULL
             )'
         );
+        $this->pdo->exec(
+            'CREATE TABLE email_worker_heartbeats (
+                worker_id TEXT PRIMARY KEY,
+                queue TEXT NOT NULL,
+                host TEXT NOT NULL,
+                process_id INTEGER NULL,
+                started_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_processed_at TEXT NULL,
+                last_error TEXT NULL,
+                processed_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )'
+        );
     }
 }

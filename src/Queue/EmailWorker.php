@@ -24,7 +24,9 @@ final class EmailWorker
         private readonly Env $env,
         private readonly AttachmentStorage $attachmentStorage,
         private readonly string $queue = 'standard',
-        ?EmailBranding $branding = null
+        ?EmailBranding $branding = null,
+        private readonly ?WorkerHeartbeatRepository $heartbeatRepository = null,
+        private readonly ?string $workerId = null
     ) {
         if (!in_array($this->queue, ['standard', 'technical'], true)) {
             throw new \InvalidArgumentException('Queue must be standard or technical');
@@ -34,6 +36,20 @@ final class EmailWorker
     }
 
     public function runOnce(): int
+    {
+        $this->heartbeat(0);
+        try {
+            $processed = $this->runOnceInternal();
+            $this->heartbeat($processed);
+
+            return $processed;
+        } catch (\Throwable $exception) {
+            $this->heartbeat(0, $exception->getMessage());
+            throw $exception;
+        }
+    }
+
+    private function runOnceInternal(): int
     {
         $this->releaseStaleProcessing();
         $this->cleanupTerminalAttachments();
@@ -52,19 +68,25 @@ final class EmailWorker
                 return $processed;
             }
 
-            if (!$this->rateLimiter->acquire(
+            $decision = $this->rateLimiter->acquire(
                 (string) $emails[0]['source_app'],
                 $emails[0]['client_rate_limit_count'] === null ? null : (int) $emails[0]['client_rate_limit_count'],
                 $emails[0]['client_rate_limit_window_minutes'] === null ? null : (int) $emails[0]['client_rate_limit_window_minutes']
-            )) {
+            );
+            if (!$decision->allowed) {
                 $this->repository->releaseClaim(
                     (string) $emails[0]['id'],
                     (string) $emails[0]['lease_id'],
-                    (string) $emails[0]['_previous_status']
+                    (string) $emails[0]['_previous_status'],
+                    $decision->retryAfter,
+                    $decision->reason,
+                    ((int) $emails[0]['attempts']) + 1
                 );
                 $this->logger->info('Email rate limit reached', [
-                    'limit' => $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100),
-                    'windowMinutes' => $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15),
+                    'reason' => $decision->reason,
+                    'retryAfter' => $decision->retryAfter,
+                    'limit' => $decision->limit,
+                    'used' => $decision->used,
                 ]);
 
                 return $processed;
@@ -86,15 +108,37 @@ final class EmailWorker
 
         $processed = 0;
         foreach ($emails as $index => $email) {
-            if (!$this->rateLimiter->acquire(
+            $decision = $this->rateLimiter->acquire(
                 (string) $email['source_app'],
                 $email['client_rate_limit_count'] === null ? null : (int) $email['client_rate_limit_count'],
                 $email['client_rate_limit_window_minutes'] === null ? null : (int) $email['client_rate_limit_window_minutes']
-            )) {
-                $this->releaseRemainingClaims($emails, $index);
+            );
+            if (!$decision->allowed) {
+                if ($decision->reason === 'client') {
+                    $this->repository->releaseClaim(
+                        (string) $email['id'],
+                        (string) $email['lease_id'],
+                        (string) $email['_previous_status'],
+                        $decision->retryAfter,
+                        $decision->reason,
+                        ((int) $email['attempts']) + 1
+                    );
+                    $this->logger->info('Email client rate limit reached', [
+                        'sourceApp' => $email['source_app'],
+                        'retryAfter' => $decision->retryAfter,
+                        'limit' => $decision->limit,
+                        'used' => $decision->used,
+                    ]);
+
+                    continue;
+                }
+
+                $this->releaseRemainingClaims($emails, $index, $decision);
                 $this->logger->info('Email rate limit reached', [
-                    'limit' => $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100),
-                    'windowMinutes' => $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15),
+                    'reason' => $decision->reason,
+                    'retryAfter' => $decision->retryAfter,
+                    'limit' => $decision->limit,
+                    'used' => $decision->used,
                     'releasedClaims' => count($emails) - $index,
                 ]);
 
@@ -111,13 +155,16 @@ final class EmailWorker
     /**
      * @param list<array<string, mixed>> $emails
      */
-    private function releaseRemainingClaims(array $emails, int $startIndex): void
+    private function releaseRemainingClaims(array $emails, int $startIndex, ?RateLimitDecision $decision = null): void
     {
         for ($i = $startIndex, $count = count($emails); $i < $count; $i++) {
             $this->repository->releaseClaim(
                 (string) $emails[$i]['id'],
                 (string) $emails[$i]['lease_id'],
-                (string) $emails[$i]['_previous_status']
+                (string) $emails[$i]['_previous_status'],
+                $decision?->retryAfter,
+                $decision?->reason,
+                ((int) $emails[$i]['attempts']) + 1
             );
         }
     }
@@ -134,6 +181,15 @@ final class EmailWorker
         ]);
 
         try {
+            $attempt = ((int) $row['attempts']) + 1;
+            $this->repository->recordAttemptStarted(
+                (string) $row['id'],
+                (string) $row['lease_id'],
+                $attempt,
+                $this->queue,
+                $this->workerId(),
+                (string) $row['lease_expires_at']
+            );
             $attachments = array_map(
                 fn (array $attachment): EmailAttachment => new EmailAttachment(
                     $this->attachmentStorage->absolutePath((string) $attachment['storage_path']),
@@ -153,13 +209,14 @@ final class EmailWorker
             );
             $result = $this->provider->send($this->branding->apply($message));
 
-            $marked = $this->repository->markSent(
-                $row['id'],
-                $row['lease_id'],
+            $markResult = $this->repository->markSentAfterProviderAccepted(
+                (string) $row['id'],
+                (string) $row['lease_id'],
                 $result->providerMessageId,
-                ((int) $row['attempts']) + 1
+                $attempt,
+                $this->workerId()
             );
-            if (!$marked) {
+            if ($markResult === 'lost') {
                 $this->logger->critical('Email was accepted by provider after its processing lease was lost', [
                     'id' => $row['id'],
                     'sourceApp' => $row['source_app'],
@@ -170,7 +227,7 @@ final class EmailWorker
             }
             $this->cleanupAttachments((string) $row['id']);
 
-            $this->logger->info('Email sent', [
+            $this->logger->info($markResult === 'reconciled' ? 'Email sent after lease reconciliation' : 'Email sent', [
                 'id' => $row['id'],
                 'sourceApp' => $row['source_app'],
                 'providerMessageId' => $result->providerMessageId,
@@ -277,11 +334,37 @@ final class EmailWorker
     private function processingTimeoutSeconds(): int
     {
         return max(
-            1,
+            60,
             $this->env->int('EMAIL_PROCESSING_TIMEOUT_SECONDS', 300),
             $this->queue === 'technical'
                 ? $this->env->int('GMAIL_SMTP_TIMEOUT_SECONDS', 30) + 30
-                : $this->env->int('SMTP_TIMEOUT_SECONDS', 30) + 30
+                : $this->env->int('SMTP_TIMEOUT_SECONDS', 30) + 30,
+            $this->env->int('EMAIL_WORKER_LEASE_MIN_SECONDS', 0)
+        );
+    }
+
+    private function heartbeat(int $processedDelta, ?string $lastError = null): void
+    {
+        if ($this->heartbeatRepository === null) {
+            return;
+        }
+
+        $this->heartbeatRepository->beat(
+            $this->workerId(),
+            $this->queue,
+            $processedDelta,
+            $processedDelta > 0 ? (new \DateTimeImmutable())->format('Y-m-d H:i:s') : null,
+            $lastError
+        );
+    }
+
+    private function workerId(): string
+    {
+        return $this->workerId ?? sprintf(
+            '%s:%s:%s',
+            $this->queue,
+            gethostname() ?: 'unknown',
+            getmypid() ?: 'pid'
         );
     }
 

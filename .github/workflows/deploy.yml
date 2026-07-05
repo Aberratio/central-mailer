@@ -22,6 +22,7 @@ on:
         type: choice
         options:
           - run
+          - adopt-existing
           - baseline
           - dry-run
           - skip
@@ -427,7 +428,7 @@ jobs:
               php "$CHECK_DIR/scripts/run-migrations.php" --dry-run
               echo "Migration dry-run finished. API files were not changed."
             else
-              php "$CHECK_DIR/scripts/run-migrations.php" --baseline --baseline-through=004_add_technical_priority.sql
+              php "$CHECK_DIR/scripts/run-migrations.php" --baseline
               echo "Migration baseline finished. API files were not changed."
             fi
 
@@ -471,6 +472,9 @@ jobs:
           case "$MIGRATION_MODE" in
             run)
               php "$RELEASE_DIR/scripts/run-migrations.php"
+              ;;
+            adopt-existing)
+              php "$RELEASE_DIR/scripts/run-migrations.php" --adopt-existing
               ;;
             skip)
               echo "Migrations skipped by workflow input."

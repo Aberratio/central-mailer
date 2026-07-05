@@ -13,6 +13,7 @@ final class EmailRoutes
     {
         $app->get('/emails', [EmailController::class, 'index']);
         $app->get('/emails/unsent', [EmailController::class, 'unsent']);
+        $app->get('/emails/diagnostics', [EmailController::class, 'diagnostics']);
         $app->post('/emails/worker/run', [EmailController::class, 'runWorker']);
         $app->post('/emails', [EmailController::class, 'create']);
         $app->post('/emails/batch', [EmailController::class, 'batch']);

@@ -13,6 +13,7 @@ use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\RateLimiter;
 use CentralMailer\Queue\RateLimitRepository;
+use CentralMailer\Queue\WorkerHeartbeatRepository;
 use Dotenv\Dotenv;
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -36,7 +37,10 @@ $worker = new EmailWorker(
     new RateLimiter(new RateLimitRepository($pdo), $env),
     $logger,
     $env,
-    new AttachmentStorage($root . '/storage/attachments')
+    new AttachmentStorage($root . '/storage/attachments'),
+    'standard',
+    null,
+    new WorkerHeartbeatRepository($pdo)
 );
 
 $logger->info('Email worker started');
