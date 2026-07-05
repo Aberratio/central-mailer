@@ -957,6 +957,57 @@ final class EmailQueueRepository
         return $counts;
     }
 
+    /** @return array<string, int> */
+    public function globalStatusCounts(): array
+    {
+        $stmt = $this->pdo->query(
+            'SELECT status, COUNT(*) AS count
+             FROM email_queue
+             GROUP BY status'
+        );
+        $counts = self::emptyStatusCounts();
+        foreach ($stmt->fetchAll() as $row) {
+            $status = (string) $row['status'];
+            if (array_key_exists($status, $counts)) {
+                $counts[$status] = (int) $row['count'];
+            }
+        }
+
+        return $counts;
+    }
+
+    /** @return list<array{sourceApp: string, statusCounts: array<string, int>}> */
+    public function statusCountsBySourceApp(): array
+    {
+        $stmt = $this->pdo->query(
+            'SELECT c.source_app, q.status, COUNT(q.id) AS count
+             FROM email_clients c
+             LEFT JOIN email_queue q ON q.source_app = c.source_app
+             WHERE c.active = 1
+             GROUP BY c.source_app, q.status
+             ORDER BY c.source_app ASC'
+        );
+        $bySource = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $sourceApp = (string) $row['source_app'];
+            if (!isset($bySource[$sourceApp])) {
+                $bySource[$sourceApp] = [
+                    'sourceApp' => $sourceApp,
+                    'statusCounts' => self::emptyStatusCounts(),
+                ];
+            }
+
+            if ($row['status'] !== null) {
+                $status = (string) $row['status'];
+                if (array_key_exists($status, $bySource[$sourceApp]['statusCounts'])) {
+                    $bySource[$sourceApp]['statusCounts'][$status] = (int) $row['count'];
+                }
+            }
+        }
+
+        return array_values($bySource);
+    }
+
     /** @return array<string, mixed>|null */
     public function oldestUnsentForSourceApp(string $sourceApp): ?array
     {
@@ -968,6 +1019,21 @@ final class EmailQueueRepository
              LIMIT 1'
         );
         $stmt->execute(['source_app' => $sourceApp]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function oldestUnsentGlobal(): ?array
+    {
+        $stmt = $this->pdo->query(
+            'SELECT id, source_app, status, priority, created_at, next_attempt_at, lease_expires_at, last_error
+             FROM email_queue
+             WHERE status <> "sent"
+             ORDER BY created_at ASC, id ASC
+             LIMIT 1'
+        );
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;
@@ -989,6 +1055,21 @@ final class EmailQueueRepository
         return is_string($value) && $value !== '' ? $value : null;
     }
 
+    public function nextDelayedAttemptGlobal(string $now): ?string
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT MIN(next_attempt_at)
+             FROM email_queue
+             WHERE status IN ("pending", "retry")
+               AND next_attempt_at IS NOT NULL
+               AND next_attempt_at > :now'
+        );
+        $stmt->execute(['now' => $now]);
+        $value = $stmt->fetchColumn();
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
     /** @return array<string, mixed>|null */
     public function technicalBlockerForSourceApp(string $sourceApp): ?array
     {
@@ -1005,6 +1086,53 @@ final class EmailQueueRepository
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function technicalBlockerGlobal(): ?array
+    {
+        $stmt = $this->pdo->query(
+            'SELECT id, source_app, status, created_at, next_attempt_at, lease_expires_at, last_error
+             FROM email_queue
+             WHERE priority = "technical"
+               AND status IN ("pending", "processing", "retry")
+             ORDER BY created_at ASC, id ASC
+             LIMIT 1'
+        );
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    public function staleProcessingCount(string $now): int
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*)
+             FROM email_queue
+             WHERE status = "processing"
+               AND lease_expires_at IS NOT NULL
+               AND lease_expires_at < :now'
+        );
+        $stmt->execute(['now' => $now]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function findUnsentGlobal(int $limit): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, source_app, recipient_email, subject, priority, status,
+                    next_attempt_at, lease_expires_at, last_error, created_at, updated_at
+             FROM email_queue
+             WHERE status <> "sent"
+             ORDER BY created_at ASC, id ASC
+             LIMIT :limit'
+        );
+        $stmt->bindValue('limit', max(1, min(500, $limit)), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
     }
 
     /** @return array{rateLimitCount: int|null, rateLimitWindowMinutes: int|null}|null */
@@ -1037,6 +1165,18 @@ final class EmailQueueRepository
              END
              WHERE active = 1'
         );
+    }
+
+    /** @return array<string, int> */
+    private static function emptyStatusCounts(): array
+    {
+        return [
+            'pending' => 0,
+            'processing' => 0,
+            'retry' => 0,
+            'sent' => 0,
+            'failed' => 0,
+        ];
     }
 
     private function assertCapacity(

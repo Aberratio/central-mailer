@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Central Mailer Admin</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-2: #eef2f6;
+      --text: #16202a;
+      --muted: #637083;
+      --border: #d8dee8;
+      --ok: #16855b;
+      --ok-bg: #e7f6ef;
+      --warn: #a15c00;
+      --warn-bg: #fff4df;
+      --bad: #b42318;
+      --bad-bg: #fdebea;
+      --info: #2563a6;
+      --info-bg: #e9f2fb;
+      --shadow: 0 16px 40px rgba(24, 35, 53, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: 8px;
+      min-height: 38px;
+      padding: 0 14px;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: #1d4f91;
+      border-color: #1d4f91;
+      color: #ffffff;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+    }
+
+    input, select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--text);
+      padding: 0 11px;
+    }
+
+    .app {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #233142;
+      color: #ffffff;
+      font-weight: 800;
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 22px;
+      line-height: 1.15;
+    }
+
+    h2 {
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .login {
+      max-width: 560px;
+      margin: 12vh auto 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+
+    .login form {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .checkbox-row input {
+      width: 16px;
+      min-height: 16px;
+      padding: 0;
+    }
+
+    .dashboard {
+      display: grid;
+      gap: 16px;
+    }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: minmax(260px, 1.2fr) repeat(5, minmax(110px, 1fr));
+      gap: 12px;
+    }
+
+    .panel, .metric {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(24, 35, 53, 0.04);
+    }
+
+    .panel {
+      padding: 16px;
+    }
+
+    .metric {
+      padding: 14px;
+      min-height: 96px;
+      display: grid;
+      align-content: space-between;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .metric .value {
+      font-size: 30px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .health {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      min-height: 96px;
+      padding: 16px;
+    }
+
+    .health-main {
+      display: grid;
+      gap: 7px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      gap: 6px;
+      min-height: 24px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+
+    .pill.ok { color: var(--ok); background: var(--ok-bg); border-color: #b9e5d0; }
+    .pill.warn { color: var(--warn); background: var(--warn-bg); border-color: #f4d49b; }
+    .pill.bad { color: var(--bad); background: var(--bad-bg); border-color: #f5c4c0; }
+    .pill.info { color: var(--info); background: var(--info-bg); border-color: #bdd8f4; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: minmax(110px, 35%) minmax(0, 1fr);
+      gap: 8px 12px;
+      font-size: 13px;
+    }
+
+    .kv dt {
+      color: var(--muted);
+    }
+
+    .kv dd {
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .issue-list, .worker-list, .client-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .row-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px;
+      display: grid;
+      gap: 7px;
+      background: #ffffff;
+    }
+
+    .row-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .muted-line {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .bar {
+      height: 10px;
+      background: var(--surface-2);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: #1d4f91;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: minmax(160px, 220px) minmax(150px, 190px) minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 940px;
+      background: #ffffff;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      background: #f8fafc;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .empty, .error {
+      padding: 18px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--muted);
+    }
+
+    .error {
+      color: var(--bad);
+      background: var(--bad-bg);
+      border-color: #f5c4c0;
+    }
+
+    @media (max-width: 1120px) {
+      .status-strip {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .health {
+        grid-column: 1 / -1;
+      }
+      .grid-2, .grid-3 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .app {
+        padding: 14px;
+      }
+      .topbar, .health, .row-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      .toolbar {
+        justify-content: stretch;
+      }
+      .toolbar button {
+        flex: 1;
+      }
+      .status-strip {
+        grid-template-columns: 1fr 1fr;
+      }
+      .filters {
+        grid-template-columns: 1fr;
+      }
+      .metric .value {
+        font-size: 26px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section id="login" class="login">
+      <div class="brand">
+        <div class="mark">CM</div>
+        <div>
+          <h1>Central Mailer Admin</h1>
+          <p class="subtle">Globalny status kolejek, workerow i limitow wysylki.</p>
+        </div>
+      </div>
+      <form id="loginForm">
+        <label>
+          <span class="subtle">Admin API key</span>
+          <input id="adminKey" type="password" autocomplete="current-password" required>
+        </label>
+        <label class="checkbox-row">
+          <input id="rememberKey" type="checkbox">
+          Zapamietaj w tej przegladarce
+        </label>
+        <button class="primary" type="submit">Polacz</button>
+        <div id="loginError" class="error hidden"></div>
+      </form>
+    </section>
+
+    <section id="dashboard" class="dashboard hidden">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark">CM</div>
+          <div>
+            <h1>Central Mailer Admin</h1>
+            <p class="subtle" id="lastRefresh">Nie odswiezono</p>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button id="refreshBtn" type="button">Odswiez</button>
+          <button id="logoutBtn" type="button">Wyloguj</button>
+        </div>
+      </header>
+
+      <div id="pageError" class="error hidden"></div>
+
+      <section class="status-strip">
+        <div class="panel health">
+          <div class="health-main">
+            <span id="healthPill" class="pill info">Ladowanie</span>
+            <h2 id="healthTitle">Status systemu</h2>
+            <p class="subtle" id="healthChecks">Pobieram dane z API.</p>
+          </div>
+          <div class="subtle mono" id="apiVersion"></div>
+        </div>
+        <div class="metric"><div class="label">Pending</div><div class="value" id="countPending">0</div></div>
+        <div class="metric"><div class="label">Processing</div><div class="value" id="countProcessing">0</div></div>
+        <div class="metric"><div class="label">Retry</div><div class="value" id="countRetry">0</div></div>
+        <div class="metric"><div class="label">Sent</div><div class="value" id="countSent">0</div></div>
+        <div class="metric"><div class="label">Failed</div><div class="value" id="countFailed">0</div></div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <h2>Problemy operacyjne</h2>
+          <div id="issues" class="issue-list"></div>
+        </div>
+        <div class="panel">
+          <h2>Globalny rate limit</h2>
+          <dl class="kv">
+            <dt>Uzyte</dt><dd id="rateUsed">0</dd>
+            <dt>Limit</dt><dd id="rateLimit">0</dd>
+            <dt>Pozostalo</dt><dd id="rateRemaining">0</dd>
+            <dt>Retry after</dt><dd id="rateRetry">-</dd>
+          </dl>
+          <div class="bar" style="margin-top: 12px;"><span id="rateBar"></span></div>
+        </div>
+      </section>
+
+      <section class="grid-3">
+        <div class="panel">
+          <h2>Backlog</h2>
+          <dl class="kv" id="backlog"></dl>
+        </div>
+        <div class="panel">
+          <h2>Workery</h2>
+          <div id="workers" class="worker-list"></div>
+        </div>
+        <div class="panel">
+          <h2>Klienci</h2>
+          <div id="clients" class="client-list"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="row-head" style="margin-bottom: 12px;">
+          <h2 style="margin-bottom: 0;">Niewyslane wiadomosci</h2>
+          <span class="subtle" id="unsentCount">0 rekordow</span>
+        </div>
+        <div class="filters">
+          <select id="sourceFilter" aria-label="Filtr klienta"></select>
+          <select id="statusFilter" aria-label="Filtr statusu">
+            <option value="">Wszystkie statusy</option>
+            <option value="pending">pending</option>
+            <option value="processing">processing</option>
+            <option value="retry">retry</option>
+            <option value="failed">failed</option>
+          </select>
+          <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
+        </div>
+        <div id="emptyUnsent" class="empty hidden">Brak niewyslanych wiadomosci.</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Klient</th>
+                <th>Status</th>
+                <th>Priorytet</th>
+                <th>Odbiorca</th>
+                <th>Temat</th>
+                <th>Wiek</th>
+                <th>Opoznienie</th>
+                <th>Ostatni blad</th>
+              </tr>
+            </thead>
+            <tbody id="unsentRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      login: document.getElementById('login'),
+      dashboard: document.getElementById('dashboard'),
+      loginForm: document.getElementById('loginForm'),
+      adminKey: document.getElementById('adminKey'),
+      rememberKey: document.getElementById('rememberKey'),
+      loginError: document.getElementById('loginError'),
+      pageError: document.getElementById('pageError'),
+      refreshBtn: document.getElementById('refreshBtn'),
+      logoutBtn: document.getElementById('logoutBtn'),
+      lastRefresh: document.getElementById('lastRefresh'),
+      healthPill: document.getElementById('healthPill'),
+      healthTitle: document.getElementById('healthTitle'),
+      healthChecks: document.getElementById('healthChecks'),
+      apiVersion: document.getElementById('apiVersion'),
+      countPending: document.getElementById('countPending'),
+      countProcessing: document.getElementById('countProcessing'),
+      countRetry: document.getElementById('countRetry'),
+      countSent: document.getElementById('countSent'),
+      countFailed: document.getElementById('countFailed'),
+      issues: document.getElementById('issues'),
+      rateUsed: document.getElementById('rateUsed'),
+      rateLimit: document.getElementById('rateLimit'),
+      rateRemaining: document.getElementById('rateRemaining'),
+      rateRetry: document.getElementById('rateRetry'),
+      rateBar: document.getElementById('rateBar'),
+      backlog: document.getElementById('backlog'),
+      workers: document.getElementById('workers'),
+      clients: document.getElementById('clients'),
+      sourceFilter: document.getElementById('sourceFilter'),
+      statusFilter: document.getElementById('statusFilter'),
+      searchFilter: document.getElementById('searchFilter'),
+      unsentRows: document.getElementById('unsentRows'),
+      emptyUnsent: document.getElementById('emptyUnsent'),
+      unsentCount: document.getElementById('unsentCount')
+    };
+
+    let adminKey = sessionStorage.getItem('centralMailerAdminKey') || localStorage.getItem('centralMailerAdminKey') || '';
+    let timer = null;
+    let unsentEmails = [];
+
+    if (adminKey) {
+      els.adminKey.value = adminKey;
+      showDashboard();
+      refreshAll();
+    }
+
+    els.loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      adminKey = els.adminKey.value.trim();
+      if (!adminKey) return;
+      persistKey();
+      showDashboard();
+      await refreshAll();
+    });
+
+    els.refreshBtn.addEventListener('click', refreshAll);
+    els.logoutBtn.addEventListener('click', logout);
+    els.sourceFilter.addEventListener('change', renderUnsent);
+    els.statusFilter.addEventListener('change', renderUnsent);
+    els.searchFilter.addEventListener('input', renderUnsent);
+
+    function persistKey() {
+      sessionStorage.setItem('centralMailerAdminKey', adminKey);
+      if (els.rememberKey.checked) {
+        localStorage.setItem('centralMailerAdminKey', adminKey);
+      } else {
+        localStorage.removeItem('centralMailerAdminKey');
+      }
+    }
+
+    function showDashboard() {
+      els.login.classList.add('hidden');
+      els.dashboard.classList.remove('hidden');
+      if (timer) clearInterval(timer);
+      timer = setInterval(refreshAll, 15000);
+    }
+
+    function logout() {
+      adminKey = '';
+      sessionStorage.removeItem('centralMailerAdminKey');
+      localStorage.removeItem('centralMailerAdminKey');
+      if (timer) clearInterval(timer);
+      els.dashboard.classList.add('hidden');
+      els.login.classList.remove('hidden');
+      els.adminKey.value = '';
+    }
+
+    async function refreshAll() {
+      setBusy(true);
+      clearError();
+      try {
+        const [status, unsent] = await Promise.all([
+          apiGet('/admin/status'),
+          apiGet('/admin/unsent?limit=100')
+        ]);
+        renderStatus(status);
+        unsentEmails = unsent.emails || [];
+        updateSourceFilter(status.statusCounts?.bySourceApp || []);
+        renderUnsent();
+        els.lastRefresh.textContent = `Ostatnie odswiezenie: ${new Date().toLocaleString()}`;
+      } catch (error) {
+        showError(error.message || 'Nie udalo sie pobrac danych.');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function apiGet(path) {
+      const response = await fetch(path, {
+        headers: { 'X-Admin-Key': adminKey, 'Accept': 'application/json' }
+      });
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : {};
+      if (!response.ok) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      return payload;
+    }
+
+    function renderStatus(data) {
+      const health = data.health || {};
+      const counts = data.statusCounts?.global || {};
+      const healthStatus = health.status || 'unknown';
+      els.healthPill.className = `pill ${healthStatus === 'ok' ? 'ok' : 'bad'}`;
+      els.healthPill.textContent = healthStatus.toUpperCase();
+      els.healthTitle.textContent = healthStatus === 'ok' ? 'System dziala poprawnie' : 'System wymaga uwagi';
+      els.healthChecks.textContent = `DB: ${health.checks?.database || '-'} | Attachments: ${health.checks?.attachments || '-'} | Workers: ${health.checks?.workers || '-'}`;
+      els.apiVersion.textContent = health.apiVersion ? `API ${health.apiVersion}` : '';
+      els.countPending.textContent = counts.pending || 0;
+      els.countProcessing.textContent = counts.processing || 0;
+      els.countRetry.textContent = counts.retry || 0;
+      els.countSent.textContent = counts.sent || 0;
+      els.countFailed.textContent = counts.failed || 0;
+      renderIssues(data.issues || []);
+      renderRateLimit(data.rateLimit?.global || {});
+      renderBacklog(data.backlog || {});
+      renderWorkers(data.workers || {});
+      renderClients(data.statusCounts?.bySourceApp || []);
+    }
+
+    function renderIssues(issues) {
+      if (!issues.length) {
+        els.issues.innerHTML = '<div class="empty">Brak aktywnych problemow.</div>';
+        return;
+      }
+      els.issues.innerHTML = issues.map(issue => {
+        const cls = issue.severity === 'critical' ? 'bad' : issue.severity === 'warning' ? 'warn' : 'info';
+        const extra = issue.count !== undefined ? ` (${issue.count})` : issue.retryAfter ? ` do ${escapeHtml(issue.retryAfter)}` : '';
+        return `<div class="row-item"><div class="row-head"><strong>${escapeHtml(issue.message)}${extra}</strong><span class="pill ${cls}">${escapeHtml(issue.severity)}</span></div><div class="muted-line">${escapeHtml(issue.type)}</div></div>`;
+      }).join('');
+    }
+
+    function renderRateLimit(rate) {
+      const used = Number(rate.used || 0);
+      const limit = Number(rate.limit || 0);
+      const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+      els.rateUsed.textContent = used;
+      els.rateLimit.textContent = limit || '-';
+      els.rateRemaining.textContent = rate.remaining ?? '-';
+      els.rateRetry.textContent = rate.retryAfter || '-';
+      els.rateBar.style.width = `${pct}%`;
+      els.rateBar.style.background = pct >= 95 ? 'var(--bad)' : pct >= 75 ? 'var(--warn)' : 'var(--ok)';
+    }
+
+    function renderBacklog(backlog) {
+      const oldest = backlog.oldestUnsent;
+      const blocker = backlog.technicalBlocker;
+      els.backlog.innerHTML = `
+        <dt>Najstarszy</dt><dd>${oldest ? `${escapeHtml(oldest.source_app || oldest.sourceApp || '-')}: <span class="mono">${escapeHtml(oldest.id)}</span>` : '-'}</dd>
+        <dt>Status</dt><dd>${oldest ? escapeHtml(oldest.status) : '-'}</dd>
+        <dt>Najblizszy retry</dt><dd>${escapeHtml(backlog.nextDelayedAt || '-')}</dd>
+        <dt>Technical blocker</dt><dd>${blocker ? `<span class="mono">${escapeHtml(blocker.id)}</span>` : '-'}</dd>
+        <dt>Stale processing</dt><dd>${backlog.staleProcessingCount || 0}</dd>
+      `;
+    }
+
+    function renderWorkers(workers) {
+      const active = workers.active || [];
+      const badges = `
+        <div class="row-item">
+          <div class="row-head">
+            <span>Standard</span><span class="pill ${workers.standardActive ? 'ok' : 'bad'}">${workers.standardActive ? 'active' : 'missing'}</span>
+          </div>
+          <div class="row-head">
+            <span>Technical</span><span class="pill ${workers.technicalActive ? 'ok' : 'bad'}">${workers.technicalActive ? 'active' : 'missing'}</span>
+          </div>
+          <div class="muted-line">Fresh window: ${workers.heartbeatFreshSeconds || '-'}s</div>
+        </div>
+      `;
+      const rows = active.map(worker => `
+        <div class="row-item">
+          <div class="row-head"><strong>${escapeHtml(worker.queue)}</strong><span class="mono">${escapeHtml(worker.workerId)}</span></div>
+          <div class="muted-line">${escapeHtml(worker.host || '-')} pid ${worker.processId ?? '-'} | seen ${escapeHtml(worker.lastSeenAt || '-')} | processed ${worker.processedCount ?? 0}</div>
+          ${worker.lastError ? `<div class="muted-line">${escapeHtml(worker.lastError)}</div>` : ''}
+        </div>
+      `).join('');
+      els.workers.innerHTML = badges + (rows || '<div class="empty">Brak aktywnych heartbeatow.</div>');
+    }
+
+    function renderClients(clients) {
+      if (!clients.length) {
+        els.clients.innerHTML = '<div class="empty">Brak aktywnych klientow.</div>';
+        return;
+      }
+      els.clients.innerHTML = clients.map(client => {
+        const c = client.statusCounts || {};
+        return `<div class="row-item"><strong>${escapeHtml(client.sourceApp)}</strong><div class="muted-line">pending ${c.pending || 0} | processing ${c.processing || 0} | retry ${c.retry || 0} | sent ${c.sent || 0} | failed ${c.failed || 0}</div></div>`;
+      }).join('');
+    }
+
+    function updateSourceFilter(clients) {
+      const current = els.sourceFilter.value;
+      els.sourceFilter.innerHTML = '<option value="">Wszyscy klienci</option>' + clients.map(client => `<option value="${escapeHtml(client.sourceApp)}">${escapeHtml(client.sourceApp)}</option>`).join('');
+      els.sourceFilter.value = [...els.sourceFilter.options].some(option => option.value === current) ? current : '';
+    }
+
+    function renderUnsent() {
+      const source = els.sourceFilter.value;
+      const status = els.statusFilter.value;
+      const search = els.searchFilter.value.trim().toLowerCase();
+      const rows = unsentEmails.filter(email => {
+        if (source && email.sourceApp !== source) return false;
+        if (status && email.status !== status) return false;
+        if (!search) return true;
+        return [email.id, email.to, email.subject].some(value => String(value || '').toLowerCase().includes(search));
+      });
+      els.unsentCount.textContent = `${rows.length} rekordow`;
+      els.emptyUnsent.classList.toggle('hidden', rows.length !== 0);
+      els.unsentRows.innerHTML = rows.map(email => `
+        <tr>
+          <td>${escapeHtml(email.sourceApp)}</td>
+          <td>${statusPill(email.status)}</td>
+          <td>${escapeHtml(email.priority || '-')}</td>
+          <td>${escapeHtml(email.to || '-')}</td>
+          <td><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
+          <td>${formatDuration(email.queueAgeSeconds)}</td>
+          <td>${escapeHtml(email.delayReason || '-')}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
+          <td>${escapeHtml(email.lastError || '-')}</td>
+        </tr>
+      `).join('');
+    }
+
+    function statusPill(status) {
+      const cls = status === 'failed' ? 'bad' : status === 'retry' ? 'warn' : status === 'processing' ? 'info' : 'ok';
+      return `<span class="pill ${cls}">${escapeHtml(status || '-')}</span>`;
+    }
+
+    function formatDuration(seconds) {
+      if (seconds === null || seconds === undefined) return '-';
+      const s = Number(seconds);
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m`;
+      const h = Math.floor(m / 60);
+      if (h < 48) return `${h}h ${m % 60}m`;
+      return `${Math.floor(h / 24)}d ${h % 24}h`;
+    }
+
+    function setBusy(isBusy) {
+      els.refreshBtn.disabled = isBusy;
+      els.refreshBtn.textContent = isBusy ? 'Odswiezam...' : 'Odswiez';
+    }
+
+    function showError(message) {
+      const box = els.dashboard.classList.contains('hidden') ? els.loginError : els.pageError;
+      box.textContent = message;
+      box.classList.remove('hidden');
+      if (message.includes('admin key')) {
+        logout();
+        els.loginError.textContent = message;
+        els.loginError.classList.remove('hidden');
+      }
+    }
+
+    function clearError() {
+      els.loginError.classList.add('hidden');
+      els.pageError.classList.add('hidden');
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      }[char]));
+    }
+  </script>
+</body>
+</html>
