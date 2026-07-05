@@ -51,6 +51,8 @@ final class AdminRoutesTest extends DatabaseTestCase
         self::assertSame(1, $payload['statusCounts']['global']['pending']);
         self::assertTrue($payload['workers']['standardActive']);
         self::assertTrue($payload['workers']['technicalActive']);
+        self::assertSame('Mailer standardowy', $payload['mailers'][0]['name']);
+        self::assertSame(['normalne', 'wysoki priorytet'], $payload['mailers'][0]['messageTypes']);
     }
 
     public function testAdminUnsentReturnsRowsFromAllClients(): void
@@ -86,6 +88,11 @@ final class AdminRoutesTest extends DatabaseTestCase
         $container = new Container();
         $env = new Env([
             'ADMIN_API_KEY' => 'admin-secret',
+            'SMTP_HOST' => 'smtp.example.test',
+            'SMTP_USER' => 'sender@example.test',
+            'SMTP_FROM_EMAIL' => 'sender@example.test',
+            'GMAIL_SMTP_USER' => 'technical@example.test',
+            'GMAIL_FROM_EMAIL' => 'technical@example.test',
             'EMAIL_RATE_LIMIT_COUNT' => '10',
             'EMAIL_RATE_LIMIT_WINDOW_MINUTES' => '15',
             'EMAIL_WORKER_HEARTBEAT_STALE_SECONDS' => '60',

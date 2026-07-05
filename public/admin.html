@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Central Mailer Admin</title>
+  <title>Panel administratora mailera</title>
   <style>
     :root {
       --bg: #f5f7fa;
@@ -259,9 +259,13 @@
       overflow-wrap: anywhere;
     }
 
-    .issue-list, .worker-list, .client-list {
+    .issue-list, .worker-list, .client-list, .mailer-list {
       display: grid;
       gap: 9px;
+    }
+
+    .mailer-list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .row-item {
@@ -373,6 +377,9 @@
       .grid-2, .grid-3 {
         grid-template-columns: 1fr;
       }
+      .mailer-list {
+        grid-template-columns: 1fr;
+      }
     }
 
     @media (max-width: 720px) {
@@ -407,13 +414,13 @@
       <div class="brand">
         <div class="mark">CM</div>
         <div>
-          <h1>Central Mailer Admin</h1>
+          <h1>Panel administratora mailera</h1>
           <p class="subtle">Globalny status kolejek, workerow i limitow wysylki.</p>
         </div>
       </div>
       <form id="loginForm">
         <label>
-          <span class="subtle">Admin API key</span>
+          <span class="subtle">Klucz administratora</span>
           <input id="adminKey" type="password" autocomplete="current-password" required>
         </label>
         <label class="checkbox-row">
@@ -430,7 +437,7 @@
         <div class="brand">
           <div class="mark">CM</div>
           <div>
-            <h1>Central Mailer Admin</h1>
+          <h1>Panel administratora mailera</h1>
             <p class="subtle" id="lastRefresh">Nie odswiezono</p>
           </div>
         </div>
@@ -451,11 +458,11 @@
           </div>
           <div class="subtle mono" id="apiVersion"></div>
         </div>
-        <div class="metric"><div class="label">Pending</div><div class="value" id="countPending">0</div></div>
-        <div class="metric"><div class="label">Processing</div><div class="value" id="countProcessing">0</div></div>
-        <div class="metric"><div class="label">Retry</div><div class="value" id="countRetry">0</div></div>
-        <div class="metric"><div class="label">Sent</div><div class="value" id="countSent">0</div></div>
-        <div class="metric"><div class="label">Failed</div><div class="value" id="countFailed">0</div></div>
+        <div class="metric"><div class="label">Oczekuja</div><div class="value" id="countPending">0</div></div>
+        <div class="metric"><div class="label">Wysylane</div><div class="value" id="countProcessing">0</div></div>
+        <div class="metric"><div class="label">Ponowia probe</div><div class="value" id="countRetry">0</div></div>
+        <div class="metric"><div class="label">Wyslane</div><div class="value" id="countSent">0</div></div>
+        <div class="metric"><div class="label">Nieudane</div><div class="value" id="countFailed">0</div></div>
       </section>
 
       <section class="grid-2">
@@ -469,7 +476,7 @@
             <dt>Uzyte</dt><dd id="rateUsed">0</dd>
             <dt>Limit</dt><dd id="rateLimit">0</dd>
             <dt>Pozostalo</dt><dd id="rateRemaining">0</dd>
-            <dt>Retry after</dt><dd id="rateRetry">-</dd>
+            <dt>Ponowna proba po</dt><dd id="rateRetry">-</dd>
           </dl>
           <div class="bar" style="margin-top: 12px;"><span id="rateBar"></span></div>
         </div>
@@ -481,13 +488,18 @@
           <dl class="kv" id="backlog"></dl>
         </div>
         <div class="panel">
-          <h2>Workery</h2>
+          <h2>Uruchomione workery</h2>
           <div id="workers" class="worker-list"></div>
         </div>
         <div class="panel">
           <h2>Klienci</h2>
           <div id="clients" class="client-list"></div>
         </div>
+      </section>
+
+      <section class="panel">
+        <h2>Skonfigurowane mailery</h2>
+        <div id="mailers" class="mailer-list"></div>
       </section>
 
       <section class="panel">
@@ -499,10 +511,10 @@
           <select id="sourceFilter" aria-label="Filtr klienta"></select>
           <select id="statusFilter" aria-label="Filtr statusu">
             <option value="">Wszystkie statusy</option>
-            <option value="pending">pending</option>
-            <option value="processing">processing</option>
-            <option value="retry">retry</option>
-            <option value="failed">failed</option>
+            <option value="pending">oczekuje</option>
+            <option value="processing">wysylanie</option>
+            <option value="retry">ponowna proba</option>
+            <option value="failed">nieudane</option>
           </select>
           <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
         </div>
@@ -517,7 +529,7 @@
                 <th>Odbiorca</th>
                 <th>Temat</th>
                 <th>Wiek</th>
-                <th>Opoznienie</th>
+                <th>Powod oczekiwania</th>
                 <th>Ostatni blad</th>
               </tr>
             </thead>
@@ -558,6 +570,7 @@
       backlog: document.getElementById('backlog'),
       workers: document.getElementById('workers'),
       clients: document.getElementById('clients'),
+      mailers: document.getElementById('mailers'),
       sourceFilter: document.getElementById('sourceFilter'),
       statusFilter: document.getElementById('statusFilter'),
       searchFilter: document.getElementById('searchFilter'),
@@ -644,7 +657,7 @@
       const text = await response.text();
       const payload = text ? JSON.parse(text) : {};
       if (!response.ok) {
-        throw new Error(payload.error || `HTTP ${response.status}`);
+        throw new Error(errorLabel(payload.error, response.status));
       }
       return payload;
     }
@@ -654,10 +667,10 @@
       const counts = data.statusCounts?.global || {};
       const healthStatus = health.status || 'unknown';
       els.healthPill.className = `pill ${healthStatus === 'ok' ? 'ok' : 'bad'}`;
-      els.healthPill.textContent = healthStatus.toUpperCase();
+      els.healthPill.textContent = healthStatus === 'ok' ? 'SPRAWNY' : 'PROBLEM';
       els.healthTitle.textContent = healthStatus === 'ok' ? 'System dziala poprawnie' : 'System wymaga uwagi';
-      els.healthChecks.textContent = `DB: ${health.checks?.database || '-'} | Attachments: ${health.checks?.attachments || '-'} | Workers: ${health.checks?.workers || '-'}`;
-      els.apiVersion.textContent = health.apiVersion ? `API ${health.apiVersion}` : '';
+      els.healthChecks.textContent = `Baza danych: ${checkLabel(health.checks?.database)} | Zalaczniki: ${checkLabel(health.checks?.attachments)} | Workery: ${checkLabel(health.checks?.workers)}`;
+      els.apiVersion.textContent = health.apiVersion ? `Wersja API ${health.apiVersion}` : '';
       els.countPending.textContent = counts.pending || 0;
       els.countProcessing.textContent = counts.processing || 0;
       els.countRetry.textContent = counts.retry || 0;
@@ -668,6 +681,7 @@
       renderBacklog(data.backlog || {});
       renderWorkers(data.workers || {});
       renderClients(data.statusCounts?.bySourceApp || []);
+      renderMailers(data.mailers || []);
     }
 
     function renderIssues(issues) {
@@ -678,7 +692,7 @@
       els.issues.innerHTML = issues.map(issue => {
         const cls = issue.severity === 'critical' ? 'bad' : issue.severity === 'warning' ? 'warn' : 'info';
         const extra = issue.count !== undefined ? ` (${issue.count})` : issue.retryAfter ? ` do ${escapeHtml(issue.retryAfter)}` : '';
-        return `<div class="row-item"><div class="row-head"><strong>${escapeHtml(issue.message)}${extra}</strong><span class="pill ${cls}">${escapeHtml(issue.severity)}</span></div><div class="muted-line">${escapeHtml(issue.type)}</div></div>`;
+        return `<div class="row-item"><div class="row-head"><strong>${escapeHtml(issue.title || issue.message)}${extra}</strong><span class="pill ${cls}">${escapeHtml(issue.label || severityLabel(issue.severity))}</span></div><div class="muted-line">${escapeHtml(issue.message || '')}</div></div>`;
       }).join('');
     }
 
@@ -698,11 +712,11 @@
       const oldest = backlog.oldestUnsent;
       const blocker = backlog.technicalBlocker;
       els.backlog.innerHTML = `
-        <dt>Najstarszy</dt><dd>${oldest ? `${escapeHtml(oldest.source_app || oldest.sourceApp || '-')}: <span class="mono">${escapeHtml(oldest.id)}</span>` : '-'}</dd>
-        <dt>Status</dt><dd>${oldest ? escapeHtml(oldest.status) : '-'}</dd>
-        <dt>Najblizszy retry</dt><dd>${escapeHtml(backlog.nextDelayedAt || '-')}</dd>
-        <dt>Technical blocker</dt><dd>${blocker ? `<span class="mono">${escapeHtml(blocker.id)}</span>` : '-'}</dd>
-        <dt>Stale processing</dt><dd>${backlog.staleProcessingCount || 0}</dd>
+        <dt>Najstarsza wiadomosc</dt><dd>${oldest ? `${escapeHtml(oldest.source_app || oldest.sourceApp || '-')}: <span class="mono">${escapeHtml(oldest.id)}</span>` : '-'}</dd>
+        <dt>Status</dt><dd>${oldest ? statusLabel(oldest.status) : '-'}</dd>
+        <dt>Najblizsza ponowna proba</dt><dd>${escapeHtml(backlog.nextDelayedAt || '-')}</dd>
+        <dt>Blokada techniczna FIFO</dt><dd>${blocker ? `<span class="mono">${escapeHtml(blocker.id)}</span>` : '-'}</dd>
+        <dt>Utkniete wysylanie</dt><dd>${backlog.staleProcessingCount || 0}</dd>
       `;
     }
 
@@ -711,19 +725,26 @@
       const badges = `
         <div class="row-item">
           <div class="row-head">
-            <span>Standard</span><span class="pill ${workers.standardActive ? 'ok' : 'bad'}">${workers.standardActive ? 'active' : 'missing'}</span>
+            <span>Worker standardowy</span><span class="pill ${workers.standardActive ? 'ok' : 'bad'}">${workers.standardActive ? 'aktywny' : 'brak heartbeat'}</span>
           </div>
           <div class="row-head">
-            <span>Technical</span><span class="pill ${workers.technicalActive ? 'ok' : 'bad'}">${workers.technicalActive ? 'active' : 'missing'}</span>
+            <span>Worker techniczny</span><span class="pill ${workers.technicalActive ? 'ok' : 'bad'}">${workers.technicalActive ? 'aktywny' : 'brak heartbeat'}</span>
           </div>
-          <div class="muted-line">Fresh window: ${workers.heartbeatFreshSeconds || '-'}s</div>
+          <div class="muted-line">Worker jest uznany za aktywny, jesli wyslal heartbeat w ostatnich ${workers.heartbeatFreshSeconds || '-'} sekundach.</div>
         </div>
       `;
       const rows = active.map(worker => `
         <div class="row-item">
-          <div class="row-head"><strong>${escapeHtml(worker.queue)}</strong><span class="mono">${escapeHtml(worker.workerId)}</span></div>
-          <div class="muted-line">${escapeHtml(worker.host || '-')} pid ${worker.processId ?? '-'} | seen ${escapeHtml(worker.lastSeenAt || '-')} | processed ${worker.processedCount ?? 0}</div>
-          ${worker.lastError ? `<div class="muted-line">${escapeHtml(worker.lastError)}</div>` : ''}
+          <div class="row-head"><strong>${queueLabel(worker.queue)}</strong><span class="mono">${escapeHtml(worker.workerId)}</span></div>
+          <dl class="kv">
+            <dt>Host</dt><dd>${escapeHtml(worker.host || '-')}</dd>
+            <dt>Proces</dt><dd>${worker.processId ?? '-'}</dd>
+            <dt>Uruchomiony</dt><dd>${escapeHtml(worker.startedAt || '-')}</dd>
+            <dt>Ostatni heartbeat</dt><dd>${escapeHtml(worker.lastSeenAt || '-')}</dd>
+            <dt>Ostatnio wyslal</dt><dd>${escapeHtml(worker.lastProcessedAt || 'brak wysylek')}</dd>
+            <dt>Liczba wysylek</dt><dd>${worker.processedCount ?? 0}</dd>
+          </dl>
+          ${worker.lastError ? `<div class="error">Ostatni blad: ${escapeHtml(worker.lastError)}</div>` : ''}
         </div>
       `).join('');
       els.workers.innerHTML = badges + (rows || '<div class="empty">Brak aktywnych heartbeatow.</div>');
@@ -736,8 +757,31 @@
       }
       els.clients.innerHTML = clients.map(client => {
         const c = client.statusCounts || {};
-        return `<div class="row-item"><strong>${escapeHtml(client.sourceApp)}</strong><div class="muted-line">pending ${c.pending || 0} | processing ${c.processing || 0} | retry ${c.retry || 0} | sent ${c.sent || 0} | failed ${c.failed || 0}</div></div>`;
+        return `<div class="row-item"><strong>${escapeHtml(client.sourceApp)}</strong><div class="muted-line">oczekuja ${c.pending || 0} | wysylane ${c.processing || 0} | ponowia probe ${c.retry || 0} | wyslane ${c.sent || 0} | nieudane ${c.failed || 0}</div></div>`;
       }).join('');
+    }
+
+    function renderMailers(mailers) {
+      if (!mailers.length) {
+        els.mailers.innerHTML = '<div class="empty">Brak danych o konfiguracji mailerow.</div>';
+        return;
+      }
+      els.mailers.innerHTML = mailers.map(mailer => `
+        <div class="row-item">
+          <div class="row-head"><strong>${escapeHtml(mailer.name || queueLabel(mailer.queue))}</strong><span class="pill info">${queueLabel(mailer.queue)}</span></div>
+          <dl class="kv">
+            <dt>Typ wiadomosci</dt><dd>${(mailer.messageTypes || []).map(escapeHtml).join(', ') || '-'}</dd>
+            <dt>Dostawca</dt><dd>${escapeHtml(mailer.provider || '-')}</dd>
+            <dt>Serwer</dt><dd>${escapeHtml(mailer.host || '-')}</dd>
+            <dt>Port</dt><dd>${mailer.port ?? '-'}</dd>
+            <dt>Szyfrowanie</dt><dd>${escapeHtml(mailer.secure || '-')}</dd>
+            <dt>Login SMTP</dt><dd>${escapeHtml(mailer.username || '-')}</dd>
+            <dt>Nadawca</dt><dd>${escapeHtml(mailer.fromEmail || '-')}</dd>
+            <dt>Limit czasu</dt><dd>${mailer.timeoutSeconds ?? '-'} s</dd>
+            ${mailer.fallbackToStandard !== undefined ? `<dt>Awaryjny powrot</dt><dd>${mailer.fallbackToStandard ? 'po nieudanych probach wraca do kolejki standardowej' : 'wylaczony'}</dd>` : ''}
+          </dl>
+        </div>
+      `).join('');
     }
 
     function updateSourceFilter(clients) {
@@ -762,11 +806,11 @@
         <tr>
           <td>${escapeHtml(email.sourceApp)}</td>
           <td>${statusPill(email.status)}</td>
-          <td>${escapeHtml(email.priority || '-')}</td>
+          <td>${priorityLabel(email.priority)}</td>
           <td>${escapeHtml(email.to || '-')}</td>
           <td><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
           <td>${formatDuration(email.queueAgeSeconds)}</td>
-          <td>${escapeHtml(email.delayReason || '-')}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
+          <td>${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
           <td>${escapeHtml(email.lastError || '-')}</td>
         </tr>
       `).join('');
@@ -774,7 +818,67 @@
 
     function statusPill(status) {
       const cls = status === 'failed' ? 'bad' : status === 'retry' ? 'warn' : status === 'processing' ? 'info' : 'ok';
-      return `<span class="pill ${cls}">${escapeHtml(status || '-')}</span>`;
+      return `<span class="pill ${cls}">${statusLabel(status)}</span>`;
+    }
+
+    function statusLabel(status) {
+      return {
+        pending: 'oczekuje',
+        processing: 'wysylanie',
+        retry: 'ponowna proba',
+        sent: 'wyslane',
+        failed: 'nieudane'
+      }[status] || escapeHtml(status || '-');
+    }
+
+    function priorityLabel(priority) {
+      return {
+        normal: 'normalny',
+        high: 'wysoki',
+        technical: 'techniczny'
+      }[priority] || escapeHtml(priority || '-');
+    }
+
+    function queueLabel(queue) {
+      return {
+        standard: 'kolejka standardowa',
+        technical: 'kolejka techniczna'
+      }[queue] || escapeHtml(queue || '-');
+    }
+
+    function delayLabel(reason) {
+      return {
+        rate_limited: 'limit wysylki',
+        retry_backoff: 'czeka na ponowna probe',
+        scheduled: 'zaplanowana wysylka',
+        processing: 'aktualnie wysylana',
+        stale_processing: 'utknela w wysylaniu',
+        awaiting_worker: 'czeka na workera',
+        retry_due: 'gotowa do ponownej proby'
+      }[reason] || '-';
+    }
+
+    function severityLabel(severity) {
+      return {
+        critical: 'Krytyczny',
+        warning: 'Ostrzezenie',
+        info: 'Informacja'
+      }[severity] || 'Informacja';
+    }
+
+    function checkLabel(value) {
+      return {
+        ok: 'dziala',
+        writable: 'zapisywalne',
+        degraded: 'wymaga uwagi',
+        error: 'blad'
+      }[value] || '-';
+    }
+
+    function errorLabel(message, status) {
+      if (message === 'Invalid or missing admin key') return 'Nieprawidlowy albo brakujacy klucz administratora.';
+      if (message === 'Admin API key is not configured') return 'Klucz administratora nie jest skonfigurowany na serwerze.';
+      return message || `Blad polaczenia z serwerem (${status})`;
     }
 
     function formatDuration(seconds) {
@@ -797,7 +901,7 @@
       const box = els.dashboard.classList.contains('hidden') ? els.loginError : els.pageError;
       box.textContent = message;
       box.classList.remove('hidden');
-      if (message.includes('admin key')) {
+      if (message.includes('klucz administratora') || message.includes('admin key')) {
         logout();
         els.loginError.textContent = message;
         els.loginError.classList.remove('hidden');

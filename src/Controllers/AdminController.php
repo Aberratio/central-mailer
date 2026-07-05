@@ -81,6 +81,7 @@ final class AdminController
             'rateLimit' => [
                 'global' => $rateLimit,
             ],
+            'mailers' => $this->mailers(),
             'workers' => [
                 'heartbeatFreshSeconds' => $heartbeatFreshSeconds,
                 'standardActive' => $workerCounts['standard'] > 0,
@@ -123,33 +124,107 @@ final class AdminController
     {
         $issues = [];
         if ($workerCounts['standard'] === 0) {
-            $issues[] = ['severity' => 'critical', 'type' => 'worker_missing', 'message' => 'Standard worker heartbeat is missing'];
+            $issues[] = [
+                'severity' => 'critical',
+                'label' => 'Krytyczny',
+                'type' => 'worker_missing',
+                'title' => 'Brak aktywnego workera standardowego',
+                'message' => 'Nie ma swiezego heartbeat dla kolejki standardowej. Wiadomosci normalne i wysokiego priorytetu moga nie wychodzic.',
+            ];
         }
         if ($workerCounts['technical'] === 0) {
-            $issues[] = ['severity' => 'critical', 'type' => 'worker_missing', 'message' => 'Technical worker heartbeat is missing'];
+            $issues[] = [
+                'severity' => 'critical',
+                'label' => 'Krytyczny',
+                'type' => 'worker_missing',
+                'title' => 'Brak aktywnego workera technicznego',
+                'message' => 'Nie ma swiezego heartbeat dla kolejki technicznej. Wiadomosci techniczne FIFO moga stac w kolejce.',
+            ];
         }
         if (($backlog['staleProcessingCount'] ?? 0) > 0) {
             $issues[] = [
                 'severity' => 'critical',
+                'label' => 'Krytyczny',
                 'type' => 'stale_processing',
-                'message' => 'Processing leases have expired',
+                'title' => 'Wiadomosci utknely w przetwarzaniu',
+                'message' => 'Czesc wiadomosci ma wygasnieta dzierzawe przetwarzania. Worker powinien je zwolnic przy kolejnym przebiegu.',
                 'count' => $backlog['staleProcessingCount'],
             ];
         }
         if (($statusCounts['failed'] ?? 0) > 0) {
-            $issues[] = ['severity' => 'warning', 'type' => 'failed_emails', 'message' => 'Emails have failed permanently', 'count' => $statusCounts['failed']];
+            $issues[] = [
+                'severity' => 'warning',
+                'label' => 'Ostrzezenie',
+                'type' => 'failed_emails',
+                'title' => 'Sa trwale nieudane wysylki',
+                'message' => 'Te wiadomosci wyczerpaly limit prob i nie beda juz wysylane automatycznie.',
+                'count' => $statusCounts['failed'],
+            ];
         }
         if (($statusCounts['retry'] ?? 0) > 0) {
-            $issues[] = ['severity' => 'warning', 'type' => 'retry_backlog', 'message' => 'Emails are waiting for retry', 'count' => $statusCounts['retry']];
+            $issues[] = [
+                'severity' => 'warning',
+                'label' => 'Ostrzezenie',
+                'type' => 'retry_backlog',
+                'title' => 'Wiadomosci czekaja na ponowna probe',
+                'message' => 'Czesc wysylek czeka na ponowna probe. To zwykle oznacza blad SMTP, limit lub chwilowy problem dostawcy.',
+                'count' => $statusCounts['retry'],
+            ];
         }
         if (($rateLimit['remaining'] ?? null) === 0) {
-            $issues[] = ['severity' => 'warning', 'type' => 'rate_limited', 'message' => 'Global sending rate limit is exhausted', 'retryAfter' => $rateLimit['retryAfter'] ?? null];
+            $issues[] = [
+                'severity' => 'warning',
+                'label' => 'Ostrzezenie',
+                'type' => 'rate_limited',
+                'title' => 'Globalny limit wysylki jest wyczerpany',
+                'message' => 'Worker poczeka do zwolnienia okna limitu przed kolejnymi wysylkami.',
+                'retryAfter' => $rateLimit['retryAfter'] ?? null,
+            ];
         }
         if (($statusCounts['pending'] ?? 0) > 0 || ($statusCounts['processing'] ?? 0) > 0) {
-            $issues[] = ['severity' => 'info', 'type' => 'active_backlog', 'message' => 'Emails are waiting or being processed', 'count' => ($statusCounts['pending'] ?? 0) + ($statusCounts['processing'] ?? 0)];
+            $issues[] = [
+                'severity' => 'info',
+                'label' => 'Informacja',
+                'type' => 'active_backlog',
+                'title' => 'Kolejka ma aktywne wiadomosci',
+                'message' => 'Sa wiadomosci oczekujace albo aktualnie przetwarzane przez workery.',
+                'count' => ($statusCounts['pending'] ?? 0) + ($statusCounts['processing'] ?? 0),
+            ];
         }
 
         return $issues;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function mailers(): array
+    {
+        return [
+            [
+                'name' => 'Mailer standardowy',
+                'queue' => 'standard',
+                'messageTypes' => ['normalne', 'wysoki priorytet'],
+                'provider' => 'SMTP',
+                'host' => $this->env->string('SMTP_HOST', ''),
+                'port' => $this->env->int('SMTP_PORT', 587),
+                'secure' => $this->env->string('SMTP_SECURE', 'tls'),
+                'username' => $this->env->string('SMTP_USER', ''),
+                'fromEmail' => $this->env->string('SMTP_FROM_EMAIL', ''),
+                'timeoutSeconds' => $this->env->int('SMTP_TIMEOUT_SECONDS', 30),
+            ],
+            [
+                'name' => 'Mailer techniczny',
+                'queue' => 'technical',
+                'messageTypes' => ['techniczne FIFO'],
+                'provider' => 'Gmail SMTP',
+                'host' => 'smtp.gmail.com',
+                'port' => $this->env->int('GMAIL_SMTP_PORT', 587),
+                'secure' => $this->env->string('GMAIL_SMTP_SECURE', 'tls'),
+                'username' => $this->env->string('GMAIL_SMTP_USER', ''),
+                'fromEmail' => $this->env->string('GMAIL_FROM_EMAIL', ''),
+                'timeoutSeconds' => $this->env->int('GMAIL_SMTP_TIMEOUT_SECONDS', 30),
+                'fallbackToStandard' => $this->env->bool('TECHNICAL_EMAIL_FALLBACK_TO_STANDARD', true),
+            ],
+        ];
     }
 
     /** @param array<string, mixed> $row @return array<string, mixed> */
