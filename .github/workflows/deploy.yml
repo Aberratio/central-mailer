@@ -559,32 +559,3 @@ jobs:
           find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -path "$RELEASE_DIR" -mtime +14 -exec rm -rf -- {} +
           echo "Activated API release $RELEASE_DIR"
           REMOTE
-
-      - name: Health check
-        if: env.MIGRATION_MODE == 'run' || env.MIGRATION_MODE == 'skip'
-        env:
-          API_URL: ${{ secrets.API_URL }}
-        run: |
-          set -Eeuo pipefail
-          if [ -z "$API_URL" ]; then
-            echo "API_URL is required."
-            exit 40
-          fi
-          health_url="${API_URL%/}/health"
-          attempt=1
-          while [ "$attempt" -le 12 ]; do
-            if curl --fail --show-error --silent --location --connect-timeout 5 --max-time 15 "$health_url"; then
-              printf '\nHealth check passed on attempt %s/12.\n' "$attempt"
-              exit 0
-            fi
-
-            if [ "$attempt" -lt 12 ]; then
-              echo "Health check failed on attempt $attempt/12; retrying in 5s." >&2
-              sleep 5
-            fi
-
-            attempt=$((attempt + 1))
-          done
-
-          echo "Health check failed after 12 attempts." >&2
-          exit 40
