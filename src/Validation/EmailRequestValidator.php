@@ -210,7 +210,7 @@ final class EmailRequestValidator
     }
 
     /**
-     * @return list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string, contentId: string|null}>
+     * @return list<array{filename: string, contentType: string, content: string, sizeBytes: int, sha256: string, contentId: string|null, inline: bool}>
      */
     private function attachments(mixed $value): array
     {
@@ -241,6 +241,13 @@ final class EmailRequestValidator
                 throw new \InvalidArgumentException(sprintf('Attachment filename at index %d is invalid', $index));
             }
             $contentId = $this->optionalContentId($attachment['contentId'] ?? null, $index);
+            $inline = $this->optionalInline($attachment['inline'] ?? null, $contentId !== null, $index);
+            if ($contentId !== null && !$inline) {
+                throw new \InvalidArgumentException(sprintf('Attachment inline at index %d cannot be false when contentId is set', $index));
+            }
+            if ($inline && $contentId === null) {
+                throw new \InvalidArgumentException(sprintf('Inline attachment at index %d requires contentId', $index));
+            }
 
             $encoded = $attachment['contentBase64'] ?? null;
             if (!is_string($encoded) || $encoded === '') {
@@ -255,7 +262,7 @@ final class EmailRequestValidator
             if (!in_array($contentType, $allowedTypes, true)) {
                 throw new \InvalidArgumentException(sprintf('Attachment MIME type %s is not allowed', $contentType));
             }
-            if ($contentId !== null && !str_starts_with($contentType, 'image/')) {
+            if ($inline && !str_starts_with($contentType, 'image/')) {
                 throw new \InvalidArgumentException(sprintf('Inline attachment at index %d must be an image', $index));
             }
 
@@ -272,10 +279,24 @@ final class EmailRequestValidator
                 'sizeBytes' => $sizeBytes,
                 'sha256' => hash('sha256', $content),
                 'contentId' => $contentId,
+                'inline' => $inline,
             ];
         }
 
         return $attachments;
+    }
+
+    private function optionalInline(mixed $value, bool $default, int $index): bool
+    {
+        if ($value === null) {
+            return $default;
+        }
+
+        if (!is_bool($value)) {
+            throw new \InvalidArgumentException(sprintf('Attachment inline at index %d must be a boolean', $index));
+        }
+
+        return $value;
     }
 
     private function optionalContentId(mixed $value, int $index): ?string

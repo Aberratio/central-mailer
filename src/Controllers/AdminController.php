@@ -119,6 +119,23 @@ final class AdminController
         ]);
     }
 
+    public function sent(ServerRequestInterface $request): ResponseInterface
+    {
+        $query = $request->getQueryParams();
+        $limit = isset($query['limit']) ? (int) $query['limit'] : 100;
+        $limit = min(500, max(1, $limit));
+        $now = new \DateTimeImmutable();
+
+        return $this->json([
+            'generatedAt' => self::now(),
+            'limit' => $limit,
+            'emails' => array_map(
+                fn (array $row): array => $this->emailPayload($row, $now),
+                $this->repository->findSentGlobal($limit)
+            ),
+        ]);
+    }
+
     /** @param array<string, int> $statusCounts @param array<string, mixed> $backlog @param array<string, mixed> $rateLimit @param array{standard: int, technical: int} $workerCounts @return list<array<string, mixed>> */
     private function issues(array $statusCounts, array $backlog, array $rateLimit, array $workerCounts): array
     {
@@ -242,9 +259,11 @@ final class AdminController
             'queueAgeSeconds' => self::secondsSince((string) $row['created_at'], $now),
             'delayReason' => $delay['reason'],
             'delayUntil' => $delay['until'],
-            'lastError' => $row['last_error'],
+            'lastError' => $row['last_error'] ?? null,
+            'providerMessageId' => $row['provider_message_id'] ?? null,
             'createdAt' => $row['created_at'],
             'updatedAt' => $row['updated_at'],
+            'sentAt' => $row['sent_at'] ?? null,
         ];
     }
 

@@ -33,14 +33,8 @@ final class SmtpEmailProvider implements EmailProviderInterface
             $mail->AltBody = $message->text;
         }
         foreach ($message->attachments as $attachment) {
-            if ($attachment->contentId !== null) {
-                $mail->addEmbeddedImage(
-                    $attachment->path,
-                    $attachment->contentId,
-                    $attachment->filename,
-                    PHPMailer::ENCODING_BASE64,
-                    $attachment->contentType
-                );
+            if ($attachment->inline) {
+                $this->addInlineAttachment($mail, $attachment);
                 continue;
             }
 
@@ -125,5 +119,26 @@ final class SmtpEmailProvider implements EmailProviderInterface
                 $this->brandConfig->replyToName ?? $this->brandConfig->senderName
             );
         }
+    }
+
+    private function addInlineAttachment(PHPMailer $mail, EmailAttachment $attachment): void
+    {
+        if ($attachment->contentId === null) {
+            throw new \RuntimeException('Inline attachment requires contentId');
+        }
+
+        $content = file_get_contents($attachment->path);
+        if ($content === false) {
+            throw new \RuntimeException('Unable to read inline attachment');
+        }
+
+        $mail->addStringEmbeddedImage(
+            $content,
+            $attachment->contentId,
+            '',
+            PHPMailer::ENCODING_BASE64,
+            $attachment->contentType,
+            'inline'
+        );
     }
 }

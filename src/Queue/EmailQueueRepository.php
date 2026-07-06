@@ -1135,6 +1135,23 @@ final class EmailQueueRepository
         return $stmt->fetchAll();
     }
 
+    /** @return list<array<string, mixed>> */
+    public function findSentGlobal(int $limit): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, source_app, recipient_email, subject, priority, status,
+                    provider_message_id, sent_at, created_at, updated_at
+             FROM email_queue
+             WHERE status = "sent"
+             ORDER BY sent_at DESC, updated_at DESC, id ASC
+             LIMIT :limit'
+        );
+        $stmt->bindValue('limit', max(1, min(500, $limit)), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
     /** @return array{rateLimitCount: int|null, rateLimitWindowMinutes: int|null}|null */
     public function clientRateLimitForSourceApp(string $sourceApp): ?array
     {
@@ -1377,6 +1394,7 @@ final class EmailQueueRepository
                 'sizeBytes' => $attachment['sizeBytes'],
                 'sha256' => $attachment['sha256'],
                 'contentId' => $attachment['contentId'] ?? null,
+                'inline' => $attachment['inline'] ?? (($attachment['contentId'] ?? null) !== null),
             ],
             $data['attachments'] ?? []
         );
@@ -1439,6 +1457,7 @@ final class EmailQueueRepository
                 'sizeBytes' => $attachment['sizeBytes'] ?? null,
                 'sha256' => $attachment['sha256'] ?? null,
                 'contentId' => $attachment['contentId'] ?? null,
+                'inline' => $attachment['inline'] ?? (($attachment['contentId'] ?? null) !== null),
             ],
             $attachments
         );
