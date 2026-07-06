@@ -249,7 +249,7 @@ HTML;
                     'post' => [
                         'tags' => ['Emails'],
                         'summary' => 'Dodaje paczke e-maili ze wspolna trescia',
-                        'description' => 'Tworzy osobna wiadomosc dla kazdego odbiorcy, ale przechowuje wspolny temat i tresc tylko raz. Batch nie obsluguje zalacznikow.',
+                        'description' => 'Tworzy osobna wiadomosc dla kazdego odbiorcy, ale przechowuje wspolny temat i tresc tylko raz. Zalaczniki moga byc wspolne albo zdefiniowane per odbiorca.',
                         'operationId' => 'createEmailBatch',
                         'parameters' => [
                             ['$ref' => '#/components/parameters/IdempotencyKey'],
@@ -512,7 +512,7 @@ HTML;
                     ],
                     'EmailAttachmentRequest' => [
                         'type' => 'object',
-                        'description' => 'Zalacznik zakodowany w Base64. Serwis rozpoznaje rzeczywisty MIME type z zawartosci, nie z nazwy pliku.',
+                        'description' => 'Zalacznik zakodowany w Base64. Serwis rozpoznaje rzeczywisty MIME type z zawartosci, nie z nazwy pliku. Dla obrazow osadzonych w HTML ustaw inline=true i contentId, a dla pliku widocznego jako zalacznik pomin te pola.',
                         'required' => ['filename', 'contentBase64'],
                         'properties' => [
                             'filename' => [
@@ -530,8 +530,13 @@ HTML;
                                 'type' => 'string',
                                 'nullable' => true,
                                 'maxLength' => 255,
-                                'description' => 'Opcjonalny Content-ID dla obrazow inline. W tresci HTML uzyj src="cid:wartosc-contentId".',
+                                'description' => 'Opcjonalny Content-ID dla obrazow inline. W tresci HTML uzyj src="cid:wartosc-contentId". Dla kompatybilnosci obecny contentId oznacza inline=true.',
                                 'example' => 'participant-qr-abc123',
+                            ],
+                            'inline' => [
+                                'type' => 'boolean',
+                                'default' => false,
+                                'description' => 'Ustaw true, gdy plik ma byc osadzony w tresci HTML przez cid i nie powinien byc zwyklym zalacznikiem. Wymaga contentId i obrazu MIME image/*.',
                             ],
                         ],
                     ],

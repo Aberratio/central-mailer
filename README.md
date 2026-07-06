@@ -306,6 +306,30 @@ Attachments are optional and intended for exceptional cases such as QR-code PNG 
 
 The service validates the real MIME type, stores the file under `storage/attachments`, and deletes it after the message reaches `sent` or `failed`. Multiple worker hosts must share this directory.
 
+For images embedded in the HTML body, send a separate inline item with `inline: true` and `contentId`, then reference it with `src="cid:..."`. Inline items are sent as embedded MIME parts without a filename header; normal downloadable files should be sent as regular attachments without `inline` and without `contentId`.
+
+```json
+{
+  "to": "recipient@example.com",
+  "subject": "QR code",
+  "html": "<p>Your QR code:</p><img src=\"cid:participant-qr\">",
+  "attachments": [
+    {
+      "filename": "kod-qr-inline.png",
+      "contentBase64": "iVBORw0KGgo...",
+      "contentId": "participant-qr",
+      "inline": true
+    },
+    {
+      "filename": "kod-qr.png",
+      "contentBase64": "iVBORw0KGgo..."
+    }
+  ]
+}
+```
+
+Do not add `contentId` to the downloadable copy. For backward compatibility, an attachment with `contentId` and no `inline` field is still treated as inline.
+
 ### Add a batch
 
 `POST /emails/batch` stores the common subject and body once, then creates one queue record per recipient:
