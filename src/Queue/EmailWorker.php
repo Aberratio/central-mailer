@@ -195,7 +195,8 @@ final class EmailWorker
                     $this->attachmentStorage->absolutePath((string) $attachment['storage_path']),
                     (string) $attachment['filename'],
                     (string) $attachment['content_type'],
-                    $attachment['content_id'] === null ? null : (string) $attachment['content_id']
+                    $attachment['content_id'] === null ? null : (string) $attachment['content_id'],
+                    $attachment['content_id'] !== null
                 ),
                 $this->repository->findAttachments((string) $row['id'])
             );

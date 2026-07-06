@@ -323,6 +323,35 @@
       margin-bottom: 12px;
     }
 
+    .filters.sent {
+      grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+    }
+
+    .tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+
+    .tab {
+      min-height: 32px;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .tab.active {
+      background: var(--surface);
+      border-color: var(--border);
+      color: var(--text);
+      box-shadow: 0 4px 12px rgba(24, 35, 53, 0.06);
+    }
+
     .table-wrap {
       overflow-x: auto;
       border: 1px solid var(--border);
@@ -433,6 +462,9 @@
         padding: 12px;
       }
       .filters {
+        grid-template-columns: 1fr;
+      }
+      .filters.sent {
         grid-template-columns: 1fr;
       }
       .metric .value {
@@ -613,37 +645,73 @@
 
       <section class="panel">
         <div class="row-head" style="margin-bottom: 12px;">
-          <h2 style="margin-bottom: 0;">Niewyslane wiadomosci</h2>
-          <span class="subtle" id="unsentCount">0 rekordow</span>
+          <h2 style="margin-bottom: 0;">Wiadomosci</h2>
+          <div class="tabs" role="tablist" aria-label="Widok wiadomosci">
+            <button id="unsentTab" class="tab active" type="button" role="tab" aria-controls="unsentPanel" aria-selected="true">Niewyslane</button>
+            <button id="sentTab" class="tab" type="button" role="tab" aria-controls="sentPanel" aria-selected="false">Wyslane</button>
+          </div>
         </div>
-        <div class="filters">
-          <select id="sourceFilter" aria-label="Filtr klienta"></select>
-          <select id="statusFilter" aria-label="Filtr statusu">
-            <option value="">Wszystkie statusy</option>
-            <option value="pending">oczekuje</option>
-            <option value="processing">wysylanie</option>
-            <option value="retry">ponowna proba</option>
-            <option value="failed">nieudane</option>
-          </select>
-          <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
+        <div id="unsentPanel" role="tabpanel" aria-labelledby="unsentTab">
+          <div class="row-head" style="margin-bottom: 12px;">
+            <span class="subtle">Kolejka aktywna i bledy wysylki</span>
+            <span class="subtle" id="unsentCount">0 rekordow</span>
+          </div>
+          <div class="filters">
+            <select id="sourceFilter" aria-label="Filtr klienta"></select>
+            <select id="statusFilter" aria-label="Filtr statusu">
+              <option value="">Wszystkie statusy</option>
+              <option value="pending">oczekuje</option>
+              <option value="processing">wysylanie</option>
+              <option value="retry">ponowna proba</option>
+              <option value="failed">nieudane</option>
+            </select>
+            <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
+          </div>
+          <div id="emptyUnsent" class="empty hidden">Brak niewyslanych wiadomosci.</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Klient</th>
+                  <th>Status</th>
+                  <th>Priorytet</th>
+                  <th>Odbiorca</th>
+                  <th>Temat</th>
+                  <th>Wiek</th>
+                  <th>Powod oczekiwania</th>
+                  <th>Ostatni blad</th>
+                </tr>
+              </thead>
+              <tbody id="unsentRows"></tbody>
+            </table>
+          </div>
         </div>
-        <div id="emptyUnsent" class="empty hidden">Brak niewyslanych wiadomosci.</div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Klient</th>
-                <th>Status</th>
-                <th>Priorytet</th>
-                <th>Odbiorca</th>
-                <th>Temat</th>
-                <th>Wiek</th>
-                <th>Powod oczekiwania</th>
-                <th>Ostatni blad</th>
-              </tr>
-            </thead>
-            <tbody id="unsentRows"></tbody>
-          </table>
+        <div id="sentPanel" class="hidden" role="tabpanel" aria-labelledby="sentTab">
+          <div class="row-head" style="margin-bottom: 12px;">
+            <span class="subtle">Ostatnie wiadomosci przyjete przez SMTP</span>
+            <span class="subtle" id="sentCount">0 rekordow</span>
+          </div>
+          <div class="filters sent">
+            <select id="sentSourceFilter" aria-label="Filtr klienta dla wyslanych"></select>
+            <input id="sentSearchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie, ID albo ID dostawcy">
+          </div>
+          <div id="emptySent" class="empty hidden">Brak wyslanych wiadomosci.</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Klient</th>
+                  <th>Status</th>
+                  <th>Priorytet</th>
+                  <th>Odbiorca</th>
+                  <th>Temat</th>
+                  <th>Wyslano</th>
+                  <th>ID dostawcy</th>
+                </tr>
+              </thead>
+              <tbody id="sentRows"></tbody>
+            </table>
+          </div>
         </div>
       </section>
     </section>
@@ -680,17 +748,27 @@
       workers: document.getElementById('workers'),
       clients: document.getElementById('clients'),
       mailers: document.getElementById('mailers'),
+      unsentTab: document.getElementById('unsentTab'),
+      sentTab: document.getElementById('sentTab'),
+      unsentPanel: document.getElementById('unsentPanel'),
+      sentPanel: document.getElementById('sentPanel'),
       sourceFilter: document.getElementById('sourceFilter'),
       statusFilter: document.getElementById('statusFilter'),
       searchFilter: document.getElementById('searchFilter'),
+      sentSourceFilter: document.getElementById('sentSourceFilter'),
+      sentSearchFilter: document.getElementById('sentSearchFilter'),
       unsentRows: document.getElementById('unsentRows'),
+      sentRows: document.getElementById('sentRows'),
       emptyUnsent: document.getElementById('emptyUnsent'),
-      unsentCount: document.getElementById('unsentCount')
+      emptySent: document.getElementById('emptySent'),
+      unsentCount: document.getElementById('unsentCount'),
+      sentCount: document.getElementById('sentCount')
     };
 
     let adminKey = sessionStorage.getItem('centralMailerAdminKey') || localStorage.getItem('centralMailerAdminKey') || '';
     let timer = null;
     let unsentEmails = [];
+    let sentEmails = [];
 
     if (adminKey) {
       els.adminKey.value = adminKey;
@@ -712,6 +790,10 @@
     els.sourceFilter.addEventListener('change', renderUnsent);
     els.statusFilter.addEventListener('change', renderUnsent);
     els.searchFilter.addEventListener('input', renderUnsent);
+    els.sentSourceFilter.addEventListener('change', renderSent);
+    els.sentSearchFilter.addEventListener('input', renderSent);
+    els.unsentTab.addEventListener('click', () => setMessageTab('unsent'));
+    els.sentTab.addEventListener('click', () => setMessageTab('sent'));
 
     function persistKey() {
       sessionStorage.setItem('centralMailerAdminKey', adminKey);
@@ -743,14 +825,17 @@
       setBusy(true);
       clearError();
       try {
-        const [status, unsent] = await Promise.all([
+        const [status, unsent, sent] = await Promise.all([
           apiGet('/admin/status'),
-          apiGet('/admin/unsent?limit=100')
+          apiGet('/admin/unsent?limit=100'),
+          apiGet('/admin/sent?limit=100')
         ]);
         renderStatus(status);
         unsentEmails = unsent.emails || [];
+        sentEmails = sent.emails || [];
         updateSourceFilter(status.statusCounts?.bySourceApp || []);
         renderUnsent();
+        renderSent();
         els.lastRefresh.textContent = `Ostatnie odswiezenie: ${new Date().toLocaleString()}`;
       } catch (error) {
         showError(error.message || 'Nie udalo sie pobrac danych.');
@@ -895,8 +980,22 @@
 
     function updateSourceFilter(clients) {
       const current = els.sourceFilter.value;
-      els.sourceFilter.innerHTML = '<option value="">Wszyscy klienci</option>' + clients.map(client => `<option value="${escapeHtml(client.sourceApp)}">${escapeHtml(client.sourceApp)}</option>`).join('');
+      const currentSent = els.sentSourceFilter.value;
+      const options = '<option value="">Wszyscy klienci</option>' + clients.map(client => `<option value="${escapeHtml(client.sourceApp)}">${escapeHtml(client.sourceApp)}</option>`).join('');
+      els.sourceFilter.innerHTML = options;
+      els.sentSourceFilter.innerHTML = options;
       els.sourceFilter.value = [...els.sourceFilter.options].some(option => option.value === current) ? current : '';
+      els.sentSourceFilter.value = [...els.sentSourceFilter.options].some(option => option.value === currentSent) ? currentSent : '';
+    }
+
+    function setMessageTab(tab) {
+      const showSent = tab === 'sent';
+      els.unsentTab.classList.toggle('active', !showSent);
+      els.sentTab.classList.toggle('active', showSent);
+      els.unsentTab.setAttribute('aria-selected', showSent ? 'false' : 'true');
+      els.sentTab.setAttribute('aria-selected', showSent ? 'true' : 'false');
+      els.unsentPanel.classList.toggle('hidden', showSent);
+      els.sentPanel.classList.toggle('hidden', !showSent);
     }
 
     function renderUnsent() {
@@ -921,6 +1020,29 @@
           <td data-label="Wiek">${formatDuration(email.queueAgeSeconds)}</td>
           <td data-label="Powod oczekiwania">${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
           <td data-label="Ostatni blad">${escapeHtml(email.lastError || '-')}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderSent() {
+      const source = els.sentSourceFilter.value;
+      const search = els.sentSearchFilter.value.trim().toLowerCase();
+      const rows = sentEmails.filter(email => {
+        if (source && email.sourceApp !== source) return false;
+        if (!search) return true;
+        return [email.id, email.to, email.subject, email.providerMessageId].some(value => String(value || '').toLowerCase().includes(search));
+      });
+      els.sentCount.textContent = `${rows.length} rekordow`;
+      els.emptySent.classList.toggle('hidden', rows.length !== 0);
+      els.sentRows.innerHTML = rows.map(email => `
+        <tr>
+          <td data-label="Klient">${escapeHtml(email.sourceApp)}</td>
+          <td data-label="Status">${statusPill(email.status)}</td>
+          <td data-label="Priorytet">${priorityLabel(email.priority)}</td>
+          <td data-label="Odbiorca">${escapeHtml(email.to || '-')}</td>
+          <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
+          <td data-label="Wyslano">${escapeHtml(email.sentAt || '-')}</td>
+          <td data-label="ID dostawcy" class="mono">${escapeHtml(email.providerMessageId || '-')}</td>
         </tr>
       `).join('');
     }

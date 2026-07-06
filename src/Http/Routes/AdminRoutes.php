@@ -13,5 +13,6 @@ final class AdminRoutes
     {
         $app->get('/admin/status', [AdminController::class, 'status']);
         $app->get('/admin/unsent', [AdminController::class, 'unsent']);
+        $app->get('/admin/sent', [AdminController::class, 'sent']);
     }
 }

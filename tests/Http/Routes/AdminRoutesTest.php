@@ -71,6 +71,37 @@ final class AdminRoutesTest extends DatabaseTestCase
         self::assertSame(['app-a', 'app-b'], array_column($payload['emails'], 'sourceApp'));
     }
 
+    public function testAdminSentReturnsSentRowsFromAllClientsNewestFirst(): void
+    {
+        $this->insertQueueRow([
+            'id' => 'admin-sent-older',
+            'source_app' => 'app-a',
+            'status' => 'sent',
+            'provider_message_id' => 'provider-older',
+            'sent_at' => '2026-01-01 10:05:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'admin-sent-newer',
+            'source_app' => 'app-b',
+            'status' => 'sent',
+            'provider_message_id' => 'provider-newer',
+            'sent_at' => '2026-01-01 10:10:00',
+        ]);
+        $this->insertQueueRow(['id' => 'admin-pending-hidden', 'source_app' => 'app-a', 'status' => 'pending']);
+        $app = $this->app();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/sent?limit=10')
+            ->withHeader('X-Admin-Key', 'admin-secret');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(['admin-sent-newer', 'admin-sent-older'], array_column($payload['emails'], 'id'));
+        self::assertSame(['app-b', 'app-a'], array_column($payload['emails'], 'sourceApp'));
+        self::assertSame('provider-newer', $payload['emails'][0]['providerMessageId']);
+    }
+
     public function testClientEndpointsStillRequireClientApiKey(): void
     {
         $app = $this->app();
