@@ -98,6 +98,65 @@ final class EmailRequestValidatorTest extends TestCase
         self::assertSame('technical', $result['priority']);
     }
 
+    public function testAcceptsInlineAttachmentFlagWithContentId(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateQueuePayload([
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'QR',
+            'html' => '<img src="cid:qr-inline">',
+            'attachments' => [[
+                'filename' => 'qr.png',
+                'contentBase64' => self::tinyPngBase64(),
+                'contentId' => 'qr-inline',
+                'inline' => true,
+            ]],
+        ]);
+
+        self::assertTrue($result['attachments'][0]['inline']);
+        self::assertSame('qr-inline', $result['attachments'][0]['contentId']);
+    }
+
+    public function testRejectsInlineAttachmentWithoutContentId(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Inline attachment at index 0 requires contentId');
+
+        $validator->validateQueuePayload([
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'QR',
+            'html' => '<img src="cid:qr-inline">',
+            'attachments' => [[
+                'filename' => 'qr.png',
+                'contentBase64' => self::tinyPngBase64(),
+                'inline' => true,
+            ]],
+        ]);
+    }
+
+    public function testRejectsContentIdWhenInlineIsFalse(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Attachment inline at index 0 cannot be false when contentId is set');
+
+        $validator->validateQueuePayload([
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'QR',
+            'html' => '<img src="cid:qr-inline">',
+            'attachments' => [[
+                'filename' => 'qr.png',
+                'contentBase64' => self::tinyPngBase64(),
+                'contentId' => 'qr-inline',
+                'inline' => false,
+            ]],
+        ]);
+    }
+
     /** @return array<string, mixed> */
     private function payload(string $to): array
     {
@@ -106,5 +165,10 @@ final class EmailRequestValidatorTest extends TestCase
             'subject' => 'Subject',
             'html' => '<p>Body</p>',
         ];
+    }
+
+    private static function tinyPngBase64(): string
+    {
+        return 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=';
     }
 }
