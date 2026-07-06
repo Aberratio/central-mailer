@@ -31,6 +31,7 @@
       background: var(--bg);
       color: var(--text);
       line-height: 1.4;
+      overflow-x: hidden;
     }
 
     button, input, select {
@@ -89,6 +90,10 @@
       min-width: 0;
     }
 
+    .brand > div:last-child {
+      min-width: 0;
+    }
+
     .mark {
       width: 38px;
       height: 38px;
@@ -107,6 +112,7 @@
     h1 {
       font-size: 22px;
       line-height: 1.15;
+      overflow-wrap: anywhere;
     }
 
     h2 {
@@ -282,6 +288,11 @@
       justify-content: space-between;
       align-items: center;
       gap: 10px;
+      min-width: 0;
+    }
+
+    .row-head > * {
+      min-width: 0;
     }
 
     .muted-line {
@@ -347,6 +358,7 @@
     .mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
+      overflow-wrap: anywhere;
     }
 
     .hidden {
@@ -384,26 +396,123 @@
 
     @media (max-width: 720px) {
       .app {
-        padding: 14px;
+        padding: 12px;
+      }
+      .login {
+        margin-top: 7vh;
+        padding: 16px;
       }
       .topbar, .health, .row-head {
         align-items: stretch;
         flex-direction: column;
       }
+      .brand {
+        align-items: flex-start;
+      }
+      .mark {
+        flex: 0 0 auto;
+      }
+      h1 {
+        font-size: 20px;
+      }
+      .panel {
+        padding: 12px;
+      }
       .toolbar {
         justify-content: stretch;
       }
       .toolbar button {
-        flex: 1;
+        flex: 1 1 130px;
       }
       .status-strip {
         grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .metric {
+        min-height: 84px;
+        padding: 12px;
       }
       .filters {
         grid-template-columns: 1fr;
       }
       .metric .value {
         font-size: 26px;
+      }
+      .kv {
+        grid-template-columns: 1fr;
+        gap: 3px 0;
+      }
+      .kv dd {
+        margin-bottom: 8px;
+      }
+      .table-wrap {
+        overflow-x: visible;
+        border: 0;
+        border-radius: 0;
+      }
+      table {
+        display: block;
+        min-width: 0;
+        background: transparent;
+      }
+      thead {
+        display: none;
+      }
+      tbody {
+        display: grid;
+        gap: 10px;
+      }
+      tr {
+        display: grid;
+        gap: 9px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 8px 24px rgba(24, 35, 53, 0.04);
+      }
+      td {
+        display: grid;
+        grid-template-columns: minmax(96px, 34%) minmax(0, 1fr);
+        gap: 10px;
+        padding: 0;
+        border-bottom: 0;
+        font-size: 13px;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      td::before {
+        content: attr(data-label);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      td .pill {
+        justify-self: start;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .app {
+        padding: 10px;
+      }
+      .status-strip {
+        grid-template-columns: 1fr;
+      }
+      .toolbar {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+      .toolbar button {
+        width: 100%;
+      }
+      .metric {
+        min-height: 76px;
+      }
+      td {
+        grid-template-columns: 1fr;
+        gap: 3px;
       }
     }
   </style>
@@ -804,14 +913,14 @@
       els.emptyUnsent.classList.toggle('hidden', rows.length !== 0);
       els.unsentRows.innerHTML = rows.map(email => `
         <tr>
-          <td>${escapeHtml(email.sourceApp)}</td>
-          <td>${statusPill(email.status)}</td>
-          <td>${priorityLabel(email.priority)}</td>
-          <td>${escapeHtml(email.to || '-')}</td>
-          <td><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
-          <td>${formatDuration(email.queueAgeSeconds)}</td>
-          <td>${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
-          <td>${escapeHtml(email.lastError || '-')}</td>
+          <td data-label="Klient">${escapeHtml(email.sourceApp)}</td>
+          <td data-label="Status">${statusPill(email.status)}</td>
+          <td data-label="Priorytet">${priorityLabel(email.priority)}</td>
+          <td data-label="Odbiorca">${escapeHtml(email.to || '-')}</td>
+          <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
+          <td data-label="Wiek">${formatDuration(email.queueAgeSeconds)}</td>
+          <td data-label="Powod oczekiwania">${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
+          <td data-label="Ostatni blad">${escapeHtml(email.lastError || '-')}</td>
         </tr>
       `).join('');
     }
