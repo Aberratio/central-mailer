@@ -22,6 +22,9 @@ final class GmailSmtpEmailProvider implements EmailProviderInterface
         $mail = $this->mailer();
         $mail->clearAllRecipients();
         $mail->clearAttachments();
+        // The mailer instance is reused across sends (SMTPKeepAlive) - without this a
+        // transactional email would inherit the previous message's List-Unsubscribe header.
+        $mail->clearCustomHeaders();
         $mail->Subject = '';
         $mail->Body = '';
         $mail->AltBody = '';
@@ -31,6 +34,12 @@ final class GmailSmtpEmailProvider implements EmailProviderInterface
         $mail->Body = $message->html;
         if ($message->text !== null) {
             $mail->AltBody = $message->text;
+        } else {
+            // HTML-only mail is a spam signal; derive the text/plain part from the HTML body.
+            $altBody = trim($mail->html2text($message->html));
+            if ($altBody !== '') {
+                $mail->AltBody = $altBody;
+            }
         }
         foreach ($message->attachments as $attachment) {
             if ($attachment->inline) {
@@ -40,13 +49,17 @@ final class GmailSmtpEmailProvider implements EmailProviderInterface
 
             $mail->addAttachment($attachment->path, $attachment->filename, PHPMailer::ENCODING_BASE64, $attachment->contentType);
         }
+        foreach ($message->headers as $name => $value) {
+            $mail->addCustomHeader($name, $value);
+        }
 
         try {
             $mail->send();
         } catch (\Throwable $exception) {
+            $smtpError = $mail->getSMTPInstance()->getError();
             $mail->smtpClose();
             $this->mailer = null;
-            throw $exception;
+            throw SmtpErrorClassifier::wrap($exception, $smtpError);
         }
 
         return new EmailSendResult($mail->getLastMessageID() ?: null);

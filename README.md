@@ -154,6 +154,18 @@ Then add worker heartbeats and queue observability indexes:
 mysql -u root -p central_mailer < database/migrations/007_add_worker_heartbeats_observability.sql
 ```
 
+Then add the `unknown` quarantine status (duplicate-delivery protection):
+
+```bash
+mysql -u root -p central_mailer < database/migrations/008_add_unknown_status.sql
+```
+
+Then add message categories and the suppression list:
+
+```bash
+mysql -u root -p central_mailer < database/migrations/009_add_category_and_suppressions.sql
+```
+
 The deploy workflow uses the migration runner instead of invoking SQL files manually:
 
 ```bash
@@ -364,6 +376,9 @@ An application can read only its own messages. The `app-a` API key will not see 
 
 Status history is available at `GET /emails/{id}/events`. It includes queueing, processing, rate-limit releases, retries, failures, timeouts, and provider acceptance.
 
+List endpoints (`GET /emails`, `GET /emails/unsent`) accept `limit` (default 500, max 1000) and `offset`
+query parameters and return a `hasMore` flag for paging through large backlogs.
+
 Operational diagnostics are available at `GET /emails/diagnostics`. The endpoint is authenticated per client and returns status counts, the oldest unsent message, the nearest delayed retry/rate-limit timestamp, the technical FIFO blocker, rate-limit usage, and fresh worker heartbeats.
 
 Run retention cleanup periodically after attachments have been cleaned by workers:
@@ -419,6 +434,15 @@ Before each send attempt, the worker atomically reserves a rate-limit slot in th
 
 Each `email_clients` row can also define `rate_limit_count` and `rate_limit_window_minutes`. A client that reaches its own limit does not consume the remaining capacity of other clients.
 
+The technical (Gmail) queue additionally honours `GMAIL_RATE_LIMIT_COUNT` / `GMAIL_RATE_LIMIT_WINDOW_MINUTES`
+(default `450` per 24 h in `.example.env`, `0` disables). Gmail app-password SMTP has a hard daily cap
+(~500 consumer / 2000 Workspace) and exceeding it locks the account, so keep this below the real quota.
+
+Retries use exponential backoff (60 s doubling up to 1 h) with up to 30 s of random jitter, so messages
+that failed in the same tick do not retry in one synchronized wave. Permanent SMTP rejections (5xx,
+except 552) skip the retry ladder entirely and are marked `failed` after a single attempt; hard bounces
+that identify a dead mailbox (`5.1.*`, `5.2.1`) also land on the suppression list automatically.
+
 ## Logging
 
 Logs are written to:
@@ -451,10 +475,90 @@ SMTP_PORT=465
 SMTP_SECURE=ssl
 ```
 
+## Deliverability (bulk sender compliance)
+
+Mixed traffic (marketing + transactional) must satisfy the Gmail/Yahoo bulk sender rules. The mailer
+handles the message-level part; the DNS part is a one-time ops task with the highest deliverability
+leverage of all.
+
+### Message categories
+
+Every email has a `category`: `transactional` (default for `POST /emails` and all `technical` mail)
+or `marketing` (default for `POST /emails/batch`; batches can opt out with `"category": "transactional"`).
+Marketing mail automatically gets `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+headers once `UNSUBSCRIBE_SECRET` (32+ chars, required in production) is configured; links point to
+`PUBLIC_BASE_URL` (falls back to `APP_URL`) + `/unsubscribe`. The endpoint is public, idempotent and
+uses stateless HMAC tokens with no expiry (links from months-old emails must keep working). Rotate the
+secret via `UNSUBSCRIBE_SECRET_PREVIOUS`.
+
+### Suppression list
+
+`email_suppressions` blocks sending to dead or opted-out addresses. Enforced at enqueue (single email:
+HTTP 422 `recipient_suppressed`; batch: suppressed recipients are inserted as `failed` without failing
+the batch) and again at send time. Sources:
+
+- automatic: hard SMTP bounces (5xx with enhanced code `5.1.*`/`5.2.1`) suppress the address globally,
+- one-click / footer unsubscribe: suppresses marketing mail for that client only (invoices still go out),
+- manual entries via the admin panel or `POST /admin/suppressions`.
+
+### DNS checklist (do this once per sending domain)
+
+1. **SPF** - the TXT record of the From domain must include the relay that sends your mail (check your
+   hosting provider's docs for the exact `include:`).
+2. **DKIM** - first check whether the relay already signs your From domain: send a test email to a Gmail
+   account and inspect "Show original" -> `Authentication-Results` for `dkim=pass` with your domain.
+   If it does not, generate a key pair, publish the public key at `<selector>._domainkey.<domain>`, keep
+   the private key **outside the repo** next to `.env` (e.g. `~/.dkim/private.pem`), and enable in-app
+   signing with `DKIM_ENABLED=true`, `DKIM_SELECTOR`, `DKIM_PRIVATE_KEY_PATH` (standard mailer only -
+   Gmail signs its own outbound mail).
+3. **DMARC** - publish `_dmarc.<domain>` starting with `p=none; rua=mailto:...`, review reports, then
+   tighten to `p=quarantine`.
+4. **Google Postmaster Tools** - register the domain to monitor reputation and spam-rate (must stay
+   below 0.3%).
+
+## Monitoring and alerting
+
+`scripts/monitor-queue.php` (run from cron every 5-15 minutes) checks worker heartbeats, newly failed
+emails, queue latency (oldest due-but-unsent message) and quarantined `unknown` rows. It prints a
+human-readable report, exits non-zero on issues, and sends alerts through two optional channels:
+`ALERT_EMAIL` (enqueued via the technical queue) and `ALERT_WEBHOOK_URL` (JSON POST, works even when
+the queue itself is down). Alerts are throttled per type via `ALERT_THROTTLE_SECONDS` (default 1 h).
+The workers use the same notifier for critical events (permanently failed emails, lease-lost sends).
+
+For external uptime monitoring point the probe at `GET /health?strict=1`, which returns HTTP 503 when
+worker heartbeats are stale (the plain `/health` stays 200 for the deploy gate).
+
+```cron
+*/10 * * * * cd /path/to/central-mailer-smtp/current && /usr/bin/php scripts/monitor-queue.php >> ../storage/logs/monitor.log 2>&1
+```
+
+### Async bounce processing (optional)
+
+Most hard bounces are caught synchronously at SMTP time, but some relays accept the message and bounce
+later via a DSN to the Return-Path mailbox. `scripts/process-bounces.php` polls that mailbox over IMAP
+(requires PHP `ext-imap`; the script exits cleanly with a SKIP message when the extension or the
+`BOUNCE_IMAP_*` variables are missing), correlates DSNs with queue rows via the deterministic
+Message-ID, and suppresses hard-bounced (5.x.x) addresses globally:
+
+```cron
+*/30 * * * * cd /path/to/central-mailer-smtp/current && /usr/bin/php scripts/process-bounces.php >> ../storage/logs/bounces.log 2>&1
+```
+
+### Unknown delivery outcome (quarantine)
+
+If a send exceeds its processing lease *after* the SMTP attempt started, the row is quarantined as
+`status = unknown` instead of being retried - an automatic retry could deliver a duplicate. The common
+case self-heals: when the slow send actually succeeded, the worker reconciles the row straight to `sent`.
+For the rest, check `storage/logs` and the sender mailbox's Sent folder, then requeue from the admin
+panel (or `POST /admin/emails/{id}/requeue`). Message-IDs are deterministic (`<queue-uuid@domain>`), so
+receiving servers can deduplicate the rare duplicate that does slip through.
+
 ## Cron and systemd
 
 The simplest cron variant starts the worker periodically. Because the current worker is a long-running
-process, use `timeout` to stop it before the next minute and `flock` to prevent overlapping workers:
+process, use `timeout` to stop it before the next minute and `flock` to prevent overlapping workers.
+Set `EMAIL_WORKER_MAX_RUNTIME_SECONDS=50` in `.env` so the worker exits cleanly (finishing or releasing
+its current batch) *before* `timeout` sends SIGTERM:
 
 ```cron
 * * * * * cd /path/to/central-mailer-smtp/current && flock -n ../storage/worker.lock timeout 55 /usr/bin/php bin/worker.php >> ../storage/logs/cron.log 2>&1
@@ -464,6 +568,17 @@ process, use `timeout` to stop it before the next minute and `flock` to prevent 
 On shared hosting, replace `/usr/bin/php` with the PHP CLI path provided by the host, for example
 `/usr/local/php83/bin/php`. After a deploy, the next cron execution automatically uses the new application
 files, so the deploy workflow does not need to restart the worker.
+
+### Graceful shutdown
+
+Workers stop cleanly (never mid-send, releasing unsent batch claims back to `pending`) on any of:
+
+- **SIGTERM/SIGINT** — when the `pcntl` extension is available in the PHP CLI.
+- **Stop file** — create `storage/worker.stop` (standard) or `storage/technical-worker.stop` (technical);
+  works on any hosting, e.g. via SFTP. Remove the file to let the worker run again. Paths are configurable
+  with `WORKER_STOP_FILE`.
+- **Deadline** — `EMAIL_WORKER_MAX_RUNTIME_SECONDS` (0 = unlimited; recommended `50` in the cron mode above,
+  leave `0` under systemd with `RuntimeMaxSec`).
 
 On a server with systemd access, a better production variant is:
 

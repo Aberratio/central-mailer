@@ -9,6 +9,140 @@ use CentralMailer\Tests\Support\DatabaseTestCase;
 
 final class EmailQueueRepositoryTest extends DatabaseTestCase
 {
+    public function testStaleProcessingWithStartedAttemptIsQuarantinedAsUnknown(): void
+    {
+        $id = $this->insertQueueRow([
+            'status' => 'processing',
+            'lease_id' => 'lease-hung',
+            'lease_expires_at' => '2020-01-01 00:00:00',
+        ]);
+        $this->repository->recordAttemptStarted($id, 'lease-hung', 1, 'standard', 'worker-1', '2020-01-01 00:00:00');
+
+        $released = $this->repository->releaseStaleProcessing('2026-01-01 12:00:00', 'Email processing timed out');
+
+        self::assertSame(1, $released);
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('unknown', $row['status']);
+        self::assertNull($row['lease_id']);
+        self::assertNull($row['next_attempt_at']);
+        self::assertSame(1, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '$id' AND event_type = 'processing_timeout_unknown'"
+        )->fetchColumn());
+    }
+
+    public function testStaleProcessingWithoutStartedAttemptIsRetriedAsBefore(): void
+    {
+        $id = $this->insertQueueRow([
+            'status' => 'processing',
+            'lease_id' => 'lease-claimed-only',
+            'lease_expires_at' => '2020-01-01 00:00:00',
+        ]);
+
+        $released = $this->repository->releaseStaleProcessing('2026-01-01 12:00:00', 'Email processing timed out');
+
+        self::assertSame(1, $released);
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('retry', $row['status']);
+        self::assertSame(1, $row['attempts']);
+    }
+
+    public function testStaleAttemptFromPreviousLeaseIsRetriedNotQuarantined(): void
+    {
+        $id = $this->insertQueueRow([
+            'status' => 'processing',
+            'lease_id' => 'lease-new',
+            'lease_expires_at' => '2020-01-01 00:00:00',
+        ]);
+        $this->repository->recordAttemptStarted($id, 'lease-old', 1, 'standard', 'worker-1', '2020-01-01 00:00:00');
+
+        $this->repository->releaseStaleProcessing('2026-01-01 12:00:00', 'Email processing timed out');
+
+        self::assertSame('retry', $this->fetchQueueRow($id)['status']);
+    }
+
+    public function testRequeueUnknownMovesEmailBackToPending(): void
+    {
+        $id = $this->insertQueueRow([
+            'status' => 'unknown',
+            'attempts' => 2,
+            'last_error' => 'Email processing timed out',
+        ]);
+
+        self::assertTrue($this->repository->requeueUnknown($id));
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('pending', $row['status']);
+        self::assertSame(2, $row['attempts']);
+        self::assertSame(1, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '$id' AND event_type = 'unknown_requeued'"
+        )->fetchColumn());
+    }
+
+    public function testRequeueUnknownIsNoOpForOtherStatuses(): void
+    {
+        $id = $this->insertQueueRow(['status' => 'sent']);
+
+        self::assertFalse($this->repository->requeueUnknown($id));
+        self::assertSame('sent', $this->fetchQueueRow($id)['status']);
+    }
+
+    public function testFindUnsentForSourceAppSupportsPagination(): void
+    {
+        $this->insertQueueRow(['id' => 'page-one', 'created_at' => '2026-01-01 10:00:00']);
+        $this->insertQueueRow(['id' => 'page-two', 'created_at' => '2026-01-01 10:01:00']);
+        $this->insertQueueRow(['id' => 'page-three', 'created_at' => '2026-01-01 10:02:00']);
+
+        $firstPage = $this->repository->findUnsentForSourceApp('app-a', 2, 0);
+        $secondPage = $this->repository->findUnsentForSourceApp('app-a', 2, 2);
+
+        self::assertSame(['page-one', 'page-two'], array_column($firstPage, 'id'));
+        self::assertSame(['page-three'], array_column($secondPage, 'id'));
+    }
+
+    public function testErrorCodeCountsSinceAggregatesFailureEvents(): void
+    {
+        $firstId = $this->insertQueueRow(['id' => 'err-one', 'status' => 'processing', 'lease_id' => 'l1']);
+        $secondId = $this->insertQueueRow(['id' => 'err-two', 'status' => 'processing', 'lease_id' => 'l2']);
+        $this->repository->markFailedOrRetry($firstId, 'l1', 5, 5, 'permanent failure', null, 'smtp:550:5.1.1');
+        $this->repository->markFailedOrRetry($secondId, 'l2', 1, 5, 'transient failure', '2026-01-01 12:00:00', 'smtp:421');
+
+        $counts = $this->repository->errorCodeCountsSince('2026-01-01 00:00:00');
+
+        $byCode = array_column($counts, 'count', 'errorCode');
+        self::assertSame(1, $byCode['smtp:550:5.1.1']);
+        self::assertSame(1, $byCode['smtp:421']);
+    }
+
+    public function testInsertBatchMarksSuppressedRecipientsAsFailedWithoutFailingBatch(): void
+    {
+        $result = $this->repository->insertBatch([
+            'sourceApp' => 'app-a',
+            'idempotencyKey' => 'batch-suppressed',
+            'subject' => 'Newsletter',
+            'html' => '<p>News</p>',
+            'text' => null,
+            'priority' => 'normal',
+            'category' => 'marketing',
+            'metadata' => null,
+            'suppressedRecipients' => ['blocked@deliverable.test'],
+            'recipients' => [
+                ['to' => 'ok@deliverable.test', 'metadata' => null],
+                ['to' => 'Blocked@Deliverable.test', 'metadata' => null],
+            ],
+        ]);
+
+        self::assertCount(2, $result->emails);
+        self::assertSame('pending', $result->emails[0]['status']);
+        self::assertSame('failed', $result->emails[1]['status']);
+
+        $blocked = $this->fetchQueueRow($result->emails[1]['id']);
+        self::assertSame('failed', $blocked['status']);
+        self::assertSame('marketing', $blocked['category']);
+        self::assertSame('Recipient address is suppressed', $blocked['last_error']);
+        self::assertSame(1, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '{$result->emails[1]['id']}' AND event_type = 'suppressed'"
+        )->fetchColumn());
+    }
+
     public function testRejectsEnqueueWhenClientQueueCapacityIsReached(): void
     {
         $this->insertQueueRow();

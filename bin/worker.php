@@ -14,6 +14,9 @@ use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\RateLimiter;
 use CentralMailer\Queue\RateLimitRepository;
 use CentralMailer\Queue\WorkerHeartbeatRepository;
+use CentralMailer\Queue\WorkerRunner;
+use CentralMailer\Suppression\SuppressionRepository;
+use CentralMailer\Support\AlertNotifier;
 use Dotenv\Dotenv;
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -31,8 +34,11 @@ $pdo = Connection::create($env);
 $clients = new ClientRepository($pdo);
 $clients->syncLegacyClients($env);
 
+$runner = new WorkerRunner($env, $logger, $root . '/storage/worker.stop');
+$repository = new EmailQueueRepository($pdo);
+
 $worker = new EmailWorker(
-    new EmailQueueRepository($pdo),
+    $repository,
     new SmtpEmailProvider($env),
     new RateLimiter(new RateLimitRepository($pdo), $env),
     $logger,
@@ -40,14 +46,16 @@ $worker = new EmailWorker(
     new AttachmentStorage($root . '/storage/attachments'),
     'standard',
     null,
-    new WorkerHeartbeatRepository($pdo)
+    new WorkerHeartbeatRepository($pdo),
+    null,
+    fn (): bool => $runner->shouldStop(),
+    new AlertNotifier($env, $logger, $repository, $pdo, $root . '/storage/monitor-state.json'),
+    new SuppressionRepository($pdo)
 );
 
 $logger->info('Email worker started');
 
-while (true) {
-    $processed = $worker->runOnce();
-    if ($processed === 0) {
-        sleep($env->int('EMAIL_WORKER_SLEEP_SECONDS', 10));
-    }
-}
+$runner->run(
+    fn (): int => $worker->runOnce(),
+    $env->int('EMAIL_WORKER_SLEEP_SECONDS', 10)
+);

@@ -22,6 +22,9 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $mail = $this->mailer();
         $mail->clearAllRecipients();
         $mail->clearAttachments();
+        // The mailer instance is reused across sends (SMTPKeepAlive) - without this a
+        // transactional email would inherit the previous message's List-Unsubscribe header.
+        $mail->clearCustomHeaders();
         $mail->Subject = '';
         $mail->Body = '';
         $mail->AltBody = '';
@@ -31,6 +34,12 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $mail->Body = $message->html;
         if ($message->text !== null) {
             $mail->AltBody = $message->text;
+        } else {
+            // HTML-only mail is a spam signal; derive the text/plain part from the HTML body.
+            $altBody = trim($mail->html2text($message->html));
+            if ($altBody !== '') {
+                $mail->AltBody = $altBody;
+            }
         }
         foreach ($message->attachments as $attachment) {
             if ($attachment->inline) {
@@ -40,13 +49,17 @@ final class SmtpEmailProvider implements EmailProviderInterface
 
             $mail->addAttachment($attachment->path, $attachment->filename, PHPMailer::ENCODING_BASE64, $attachment->contentType);
         }
+        foreach ($message->headers as $name => $value) {
+            $mail->addCustomHeader($name, $value);
+        }
 
         try {
             $mail->send();
         } catch (\Throwable $exception) {
+            $smtpError = $mail->getSMTPInstance()->getError();
             $mail->smtpClose();
             $this->mailer = null;
-            throw $exception;
+            throw SmtpErrorClassifier::wrap($exception, $smtpError);
         }
 
         return new EmailSendResult($mail->getLastMessageID() ?: null);
@@ -89,8 +102,29 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $mail->setFrom($this->env->string('SMTP_FROM_EMAIL'), $this->brandConfig->senderName);
         $this->addReplyTo($mail);
         $mail->isHTML(true);
+        $this->configureDkim($mail);
 
         return $this->mailer = $mail;
+    }
+
+    private function configureDkim(PHPMailer $mail): void
+    {
+        if (!$this->env->bool('DKIM_ENABLED', false)) {
+            return;
+        }
+
+        $keyPath = $this->env->string('DKIM_PRIVATE_KEY_PATH');
+        if (!is_file($keyPath)) {
+            throw new \RuntimeException('DKIM_PRIVATE_KEY_PATH does not point to a readable private key file');
+        }
+
+        $fromEmail = $this->env->string('SMTP_FROM_EMAIL');
+        $mail->DKIM_domain = $this->env->string('DKIM_DOMAIN', substr(strrchr($fromEmail, '@') ?: '', 1));
+        $mail->DKIM_selector = $this->env->string('DKIM_SELECTOR', 'mail');
+        $mail->DKIM_private = $keyPath;
+        $mail->DKIM_passphrase = $this->env->nullableString('DKIM_PASSPHRASE') ?? '';
+        $mail->DKIM_identity = $fromEmail;
+        $mail->DKIM_copyHeaderFields = false;
     }
 
     private function messageIdDomain(): string

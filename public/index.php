@@ -6,6 +6,7 @@ use CentralMailer\Config\Env;
 use CentralMailer\Config\ProductionConfigValidator;
 use CentralMailer\Controllers\AdminController;
 use CentralMailer\Controllers\EmailController;
+use CentralMailer\Controllers\UnsubscribeController;
 use CentralMailer\Client\ClientRepository;
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Database\Connection;
@@ -22,6 +23,7 @@ use CentralMailer\Http\Routes\AdminRoutes;
 use CentralMailer\Http\Routes\EmailRoutes;
 use CentralMailer\Http\Routes\HealthRoutes;
 use CentralMailer\Http\Routes\OpenApiRoutes;
+use CentralMailer\Http\Routes\UnsubscribeRoutes;
 use CentralMailer\Logging\LoggerFactory;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EmailQueueService;
@@ -30,6 +32,8 @@ use CentralMailer\Queue\EnqueueRateLimitRepository;
 use CentralMailer\Queue\RateLimiter;
 use CentralMailer\Queue\RateLimitRepository;
 use CentralMailer\Queue\WorkerHeartbeatRepository;
+use CentralMailer\Suppression\SuppressionRepository;
+use CentralMailer\Suppression\UnsubscribeToken;
 use CentralMailer\Validation\EmailRequestValidator;
 use DI\Container;
 use Dotenv\Dotenv;
@@ -67,12 +71,14 @@ $container->set(RateLimitRepository::class, fn ($c) => new RateLimitRepository($
 $container->set(WorkerHeartbeatRepository::class, fn ($c) => new WorkerHeartbeatRepository($c->get(PDO::class)));
 $container->set(RateLimiter::class, fn ($c) => new RateLimiter($c->get(RateLimitRepository::class), $c->get(Env::class)));
 $container->set(EmailRequestValidator::class, fn ($c) => new EmailRequestValidator($c->get(Env::class)));
+$container->set(SuppressionRepository::class, fn ($c) => new SuppressionRepository($c->get(PDO::class)));
 $container->set(EmailQueueService::class, fn ($c) => new EmailQueueService(
     $c->get(EmailQueueRepository::class),
     $c->get(EmailRequestValidator::class),
     $c->get(LoggerInterface::class),
     $c->get(AttachmentStorage::class),
-    $c->get(Env::class)
+    $c->get(Env::class),
+    $c->get(SuppressionRepository::class)
 ));
 $container->set(EmailController::class, fn ($c) => new EmailController(
     $c->get(EmailQueueService::class),
@@ -88,8 +94,19 @@ $container->set(AdminController::class, fn ($c) => new AdminController(
     $c->get(EmailQueueRepository::class),
     $c->get(RateLimitRepository::class),
     $c->get(WorkerHeartbeatRepository::class),
-    $c->get(Env::class)
+    $c->get(Env::class),
+    $c->get(SuppressionRepository::class)
 ));
+$container->set(UnsubscribeController::class, function ($c) {
+    $env = $c->get(Env::class);
+    $secret = $env->nullableString('UNSUBSCRIBE_SECRET');
+
+    return new UnsubscribeController(
+        $c->get(SuppressionRepository::class),
+        $secret === null ? null : new UnsubscribeToken($secret, $env->nullableString('UNSUBSCRIBE_SECRET_PREVIOUS')),
+        $c->get(LoggerInterface::class)
+    );
+});
 $container->set(EmailProviderInterface::class, fn ($c) => new SmtpEmailProvider($c->get(Env::class)));
 $container->set(EmailWorker::class, fn ($c) => new EmailWorker(
     $c->get(EmailQueueRepository::class),
@@ -100,7 +117,11 @@ $container->set(EmailWorker::class, fn ($c) => new EmailWorker(
     $c->get(AttachmentStorage::class),
     'standard',
     null,
-    $c->get(WorkerHeartbeatRepository::class)
+    $c->get(WorkerHeartbeatRepository::class),
+    null,
+    null,
+    null,
+    $c->get(SuppressionRepository::class)
 ));
 
 AppFactory::setContainer($container);
@@ -121,6 +142,7 @@ ErrorMiddleware::create($app, $container->get(Env::class), $container->get(Logge
 
 OpenApiRoutes::register($app);
 HealthRoutes::register($app);
+UnsubscribeRoutes::register($app);
 AdminRoutes::register($app);
 EmailRoutes::register($app);
 

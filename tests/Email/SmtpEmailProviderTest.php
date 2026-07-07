@@ -125,6 +125,137 @@ final class SmtpEmailProviderTest extends TestCase
         self::assertStringContainsString('Content-Disposition: attachment;', $mailer->sentMime);
     }
 
+    public function testGeneratesAltBodyFromHtmlWhenTextIsMissing(): void
+    {
+        $provider = new SmtpEmailProvider(new Env([
+            'SMTP_MESSAGE_ID_DOMAIN' => 'mailer.example.test',
+            'SMTP_FROM_EMAIL' => 'sender@example.test',
+        ]));
+        $mailer = new class(true) extends PHPMailer {
+            public function send()
+            {
+                return true;
+            }
+        };
+        $mailer->isHTML(true);
+        $mailer->setFrom('sender@example.test');
+        $this->injectMailer($provider, $mailer);
+
+        $provider->send(new EmailMessage(
+            '71d9e180-b457-4fc8-b5bb-fc35ba5bc481',
+            'recipient@test.local',
+            'Subject',
+            '<p>Hello &amp; welcome</p>',
+            null
+        ));
+
+        self::assertSame('Hello & welcome', $mailer->AltBody);
+    }
+
+    public function testKeepsExplicitTextAsAltBody(): void
+    {
+        $provider = new SmtpEmailProvider(new Env([
+            'SMTP_MESSAGE_ID_DOMAIN' => 'mailer.example.test',
+            'SMTP_FROM_EMAIL' => 'sender@example.test',
+        ]));
+        $mailer = new class(true) extends PHPMailer {
+            public function send()
+            {
+                return true;
+            }
+        };
+        $mailer->isHTML(true);
+        $mailer->setFrom('sender@example.test');
+        $this->injectMailer($provider, $mailer);
+
+        $provider->send(new EmailMessage(
+            '71d9e180-b457-4fc8-b5bb-fc35ba5bc481',
+            'recipient@test.local',
+            'Subject',
+            '<p>HTML body</p>',
+            'Explicit plain text'
+        ));
+
+        self::assertSame('Explicit plain text', $mailer->AltBody);
+    }
+
+    public function testCustomHeadersAreAddedAndClearedBetweenSendsOnReusedMailer(): void
+    {
+        $provider = new SmtpEmailProvider(new Env([
+            'SMTP_MESSAGE_ID_DOMAIN' => 'mailer.example.test',
+            'SMTP_FROM_EMAIL' => 'sender@example.test',
+        ]));
+        $mailer = new class(true) extends PHPMailer {
+            public function send()
+            {
+                return true;
+            }
+        };
+        $mailer->isHTML(true);
+        $mailer->setFrom('sender@example.test');
+        $this->injectMailer($provider, $mailer);
+
+        $provider->send(new EmailMessage(
+            'id-1',
+            'recipient@test.local',
+            'Marketing',
+            '<p>News</p>',
+            null,
+            [],
+            [
+                'List-Unsubscribe' => '<https://mailer.example.test/unsubscribe?token=abc>',
+                'List-Unsubscribe-Post' => 'List-Unsubscribe=One-Click',
+            ]
+        ));
+        $headerNames = array_column($mailer->getCustomHeaders(), 0);
+        self::assertContains('List-Unsubscribe', $headerNames);
+        self::assertContains('List-Unsubscribe-Post', $headerNames);
+
+        $provider->send(new EmailMessage('id-2', 'recipient@test.local', 'Transactional', '<p>Invoice</p>', null));
+        self::assertSame([], $mailer->getCustomHeaders());
+    }
+
+    public function testDkimIsConfiguredWhenEnabled(): void
+    {
+        $keyPath = tempnam(sys_get_temp_dir(), 'central-mailer-dkim-');
+        file_put_contents($keyPath, "-----BEGIN PRIVATE KEY-----\nplaceholder\n-----END PRIVATE KEY-----\n");
+        try {
+            $provider = new SmtpEmailProvider(new Env([
+                'SMTP_HOST' => 'smtp.example.test',
+                'SMTP_USER' => 'user',
+                'SMTP_PASSWORD' => 'password',
+                'SMTP_FROM_EMAIL' => 'sender@example.test',
+                'DKIM_ENABLED' => 'true',
+                'DKIM_SELECTOR' => 'mail2026',
+                'DKIM_PRIVATE_KEY_PATH' => $keyPath,
+            ]));
+
+            $mailer = (new ReflectionMethod($provider, 'mailer'))->invoke($provider);
+
+            self::assertSame('example.test', $mailer->DKIM_domain);
+            self::assertSame('mail2026', $mailer->DKIM_selector);
+            self::assertSame($keyPath, $mailer->DKIM_private);
+            self::assertSame('sender@example.test', $mailer->DKIM_identity);
+        } finally {
+            @unlink($keyPath);
+        }
+    }
+
+    public function testDkimIsNotConfiguredWhenDisabled(): void
+    {
+        $provider = new SmtpEmailProvider(new Env([
+            'SMTP_HOST' => 'smtp.example.test',
+            'SMTP_USER' => 'user',
+            'SMTP_PASSWORD' => 'password',
+            'SMTP_FROM_EMAIL' => 'sender@example.test',
+        ]));
+
+        $mailer = (new ReflectionMethod($provider, 'mailer'))->invoke($provider);
+
+        self::assertSame('', $mailer->DKIM_domain);
+        self::assertSame('', $mailer->DKIM_selector);
+    }
+
     private function messageIdDomain(SmtpEmailProvider $provider): string
     {
         return (new ReflectionMethod($provider, 'messageIdDomain'))->invoke($provider);

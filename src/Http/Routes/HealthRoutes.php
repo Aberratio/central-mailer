@@ -41,6 +41,13 @@ final class HealthRoutes
                 ],
             ], JSON_THROW_ON_ERROR));
 
+            // strict=1 is for external uptime monitors; the deploy gate uses the lenient
+            // default because workers may legitimately be absent right after a release swap.
+            $strict = filter_var($request->getQueryParams()['strict'] ?? '0', FILTER_VALIDATE_BOOLEAN);
+            if ($strict && !$workersOk) {
+                return $response->withStatus(503)->withHeader('Content-Type', 'application/json');
+            }
+
             return $response->withHeader('Content-Type', 'application/json');
         });
     }

@@ -6,6 +6,8 @@ namespace CentralMailer\Queue;
 
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
+use CentralMailer\Suppression\RecipientSuppressedException;
+use CentralMailer\Suppression\SuppressionRepository;
 use CentralMailer\Support\Uuid;
 use CentralMailer\Validation\EmailRequestValidator;
 use Psr\Log\LoggerInterface;
@@ -17,7 +19,8 @@ final class EmailQueueService
         private readonly EmailRequestValidator $validator,
         private readonly LoggerInterface $logger,
         private readonly AttachmentStorage $attachmentStorage,
-        private readonly ?Env $env = null
+        private readonly ?Env $env = null,
+        private readonly ?SuppressionRepository $suppressions = null
     ) {
     }
 
@@ -25,6 +28,11 @@ final class EmailQueueService
     public function enqueue(string $sourceApp, array $payload, ?string $idempotencyKey = null): EnqueueResult
     {
         $validated = $this->validator->validateQueuePayload($payload);
+        if ($this->suppressions !== null
+            && $this->suppressions->isSuppressed($validated['to'], $sourceApp, $validated['category'])
+        ) {
+            throw new RecipientSuppressedException('Recipient address is suppressed');
+        }
         $idempotencyKey = $this->validateIdempotencyKey($idempotencyKey);
         if ($idempotencyKey === null) {
             $attachmentBytes = array_sum(array_column($validated['attachments'], 'sizeBytes'));
@@ -71,6 +79,13 @@ final class EmailQueueService
     public function enqueueBatch(string $sourceApp, array $payload, ?string $idempotencyKey = null): BatchEnqueueResult
     {
         $validated = $this->validator->validateBatchPayload($payload);
+        // Suppressed recipients do not fail the whole batch; their rows are inserted
+        // directly as failed so the caller sees the outcome in the batch status.
+        $suppressedRecipients = $this->suppressions === null ? [] : $this->suppressions->filterSuppressed(
+            array_map(static fn (array $recipient): string => (string) $recipient['to'], $validated['recipients']),
+            $sourceApp,
+            $validated['category']
+        );
         $idempotencyKey = $this->validateIdempotencyKey($idempotencyKey);
         $attachmentBytes = $this->batchAttachmentBytes($validated);
         if ($idempotencyKey === null) {
@@ -95,6 +110,7 @@ final class EmailQueueService
                 ...$validated,
                 'sourceApp' => $sourceApp,
                 'idempotencyKey' => $idempotencyKey,
+                'suppressedRecipients' => $suppressedRecipients,
                 'maxQueuedEmailsPerClient' => $this->maxQueuedEmailsPerClient(),
                 'maxActiveAttachmentBytesPerClient' => $this->maxActiveAttachmentBytesPerClient(),
             ]);

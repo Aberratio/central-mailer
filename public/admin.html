@@ -47,6 +47,12 @@
       padding: 0 14px;
       cursor: pointer;
     }
+    .requeue-btn {
+      min-height: 28px;
+      margin-top: 6px;
+      padding: 0 10px;
+      font-size: 12px;
+    }
 
     button.primary {
       background: #1d4f91;
@@ -170,7 +176,7 @@
 
     .status-strip {
       display: grid;
-      grid-template-columns: minmax(260px, 1.2fr) repeat(5, minmax(110px, 1fr));
+      grid-template-columns: minmax(260px, 1.2fr) repeat(6, minmax(110px, 1fr));
       gap: 12px;
     }
 
@@ -604,6 +610,7 @@
         <div class="metric"><div class="label">Ponowia probe</div><div class="value" id="countRetry">0</div></div>
         <div class="metric"><div class="label">Wyslane</div><div class="value" id="countSent">0</div></div>
         <div class="metric"><div class="label">Nieudane</div><div class="value" id="countFailed">0</div></div>
+        <div class="metric"><div class="label">Kwarantanna</div><div class="value" id="countUnknown">0</div></div>
       </section>
 
       <section class="grid-2">
@@ -664,6 +671,7 @@
               <option value="processing">wysylanie</option>
               <option value="retry">ponowna proba</option>
               <option value="failed">nieudane</option>
+              <option value="unknown">nieznany wynik</option>
             </select>
             <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
           </div>
@@ -714,6 +722,39 @@
           </div>
         </div>
       </section>
+
+      <section class="panel">
+        <div class="row-head" style="margin-bottom: 12px;">
+          <h2 style="margin-bottom: 0;">Lista supresji</h2>
+          <span class="subtle" id="suppressionCount">0 rekordow</span>
+        </div>
+        <div class="filters">
+          <input id="suppressionEmail" type="email" placeholder="adres@domena.pl" aria-label="Adres do zablokowania">
+          <select id="suppressionScope" aria-label="Zakres supresji">
+            <option value="all">wszystkie maile (globalnie)</option>
+            <option value="marketing">tylko marketing</option>
+          </select>
+          <input id="suppressionSourceApp" type="text" placeholder="klient (puste = wszyscy)" aria-label="Klient supresji">
+          <button id="suppressionAddBtn" type="button">Dodaj supresje</button>
+        </div>
+        <div id="emptySuppressions" class="empty hidden">Brak adresow na liscie supresji.</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Adres</th>
+                <th>Powod</th>
+                <th>Zakres</th>
+                <th>Klient</th>
+                <th>Utworzono</th>
+                <th>Szczegoly</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="suppressionRows"></tbody>
+          </table>
+        </div>
+      </section>
     </section>
   </main>
 
@@ -738,6 +779,7 @@
       countRetry: document.getElementById('countRetry'),
       countSent: document.getElementById('countSent'),
       countFailed: document.getElementById('countFailed'),
+      countUnknown: document.getElementById('countUnknown'),
       issues: document.getElementById('issues'),
       rateUsed: document.getElementById('rateUsed'),
       rateLimit: document.getElementById('rateLimit'),
@@ -761,6 +803,13 @@
       sentRows: document.getElementById('sentRows'),
       emptyUnsent: document.getElementById('emptyUnsent'),
       emptySent: document.getElementById('emptySent'),
+      suppressionRows: document.getElementById('suppressionRows'),
+      emptySuppressions: document.getElementById('emptySuppressions'),
+      suppressionCount: document.getElementById('suppressionCount'),
+      suppressionEmail: document.getElementById('suppressionEmail'),
+      suppressionScope: document.getElementById('suppressionScope'),
+      suppressionSourceApp: document.getElementById('suppressionSourceApp'),
+      suppressionAddBtn: document.getElementById('suppressionAddBtn'),
       unsentCount: document.getElementById('unsentCount'),
       sentCount: document.getElementById('sentCount')
     };
@@ -825,10 +874,11 @@
       setBusy(true);
       clearError();
       try {
-        const [status, unsent, sent] = await Promise.all([
+        const [status, unsent, sent, suppressions] = await Promise.all([
           apiGet('/admin/status'),
           apiGet('/admin/unsent?limit=100'),
-          apiGet('/admin/sent?limit=100')
+          apiGet('/admin/sent?limit=100'),
+          apiGet('/admin/suppressions?limit=500')
         ]);
         renderStatus(status);
         unsentEmails = unsent.emails || [];
@@ -836,6 +886,7 @@
         updateSourceFilter(status.statusCounts?.bySourceApp || []);
         renderUnsent();
         renderSent();
+        renderSuppressions(suppressions.suppressions || []);
         els.lastRefresh.textContent = `Ostatnie odswiezenie: ${new Date().toLocaleString()}`;
       } catch (error) {
         showError(error.message || 'Nie udalo sie pobrac danych.');
@@ -870,9 +921,10 @@
       els.countRetry.textContent = counts.retry || 0;
       els.countSent.textContent = counts.sent || 0;
       els.countFailed.textContent = counts.failed || 0;
+      els.countUnknown.textContent = counts.unknown || 0;
       renderIssues(data.issues || []);
       renderRateLimit(data.rateLimit?.global || {});
-      renderBacklog(data.backlog || {});
+      renderBacklog(data.backlog || {}, data.failures || {});
       renderWorkers(data.workers || {});
       renderClients(data.statusCounts?.bySourceApp || []);
       renderMailers(data.mailers || []);
@@ -902,15 +954,19 @@
       els.rateBar.style.background = pct >= 95 ? 'var(--bad)' : pct >= 75 ? 'var(--warn)' : 'var(--ok)';
     }
 
-    function renderBacklog(backlog) {
+    function renderBacklog(backlog, failures) {
       const oldest = backlog.oldestUnsent;
       const blocker = backlog.technicalBlocker;
+      const errorCodes = (failures.errorCodes || [])
+        .map(entry => `<span class="mono">${escapeHtml(entry.errorCode)}</span> (${entry.count})`)
+        .join(', ');
       els.backlog.innerHTML = `
         <dt>Najstarsza wiadomosc</dt><dd>${oldest ? `${escapeHtml(oldest.source_app || oldest.sourceApp || '-')}: <span class="mono">${escapeHtml(oldest.id)}</span>` : '-'}</dd>
         <dt>Status</dt><dd>${oldest ? statusLabel(oldest.status) : '-'}</dd>
         <dt>Najblizsza ponowna proba</dt><dd>${escapeHtml(backlog.nextDelayedAt || '-')}</dd>
         <dt>Blokada techniczna FIFO</dt><dd>${blocker ? `<span class="mono">${escapeHtml(blocker.id)}</span>` : '-'}</dd>
         <dt>Utkniete wysylanie</dt><dd>${backlog.staleProcessingCount || 0}</dd>
+        <dt>Bledy (24h)</dt><dd>${errorCodes || 'brak'}</dd>
       `;
     }
 
@@ -1019,9 +1075,42 @@
           <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
           <td data-label="Wiek">${formatDuration(email.queueAgeSeconds)}</td>
           <td data-label="Powod oczekiwania">${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
-          <td data-label="Ostatni blad">${escapeHtml(email.lastError || '-')}</td>
+          <td data-label="Ostatni blad">${escapeHtml(email.lastError || '-')}${email.status === 'unknown' ? `<div><button type="button" class="requeue-btn" data-email-id="${escapeHtml(email.id)}">Ponow wysylke</button></div>` : ''}</td>
         </tr>
       `).join('');
+    }
+
+    els.unsentRows?.addEventListener('click', async (event) => {
+      const button = event.target.closest('.requeue-btn');
+      if (!button) return;
+      const emailId = button.dataset.emailId;
+      if (!confirm(`Wiadomosc ${emailId} mogla zostac dostarczona. Sprawdz logi i skrzynke nadawcy przed ponowieniem. Kontynuowac?`)) return;
+      button.disabled = true;
+      try {
+        await apiPost(`/admin/emails/${encodeURIComponent(emailId)}/requeue`);
+        await refreshAll();
+      } catch (error) {
+        showError(error.message || 'Nie udalo sie ponowic wysylki.');
+        button.disabled = false;
+      }
+    });
+
+    async function apiPost(path, body) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'X-Admin-Key': adminKey,
+          'Accept': 'application/json',
+          ...(body ? { 'Content-Type': 'application/json' } : {})
+        },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : {};
+      if (!response.ok) {
+        throw new Error(errorLabel(payload.message || payload.error, response.status));
+      }
+      return payload;
     }
 
     function renderSent() {
@@ -1047,8 +1136,84 @@
       `).join('');
     }
 
+    function renderSuppressions(suppressions) {
+      els.suppressionCount.textContent = `${suppressions.length} rekordow`;
+      els.emptySuppressions.classList.toggle('hidden', suppressions.length !== 0);
+      els.suppressionRows.innerHTML = suppressions.map(entry => `
+        <tr>
+          <td data-label="Adres">${escapeHtml(entry.email)}</td>
+          <td data-label="Powod">${suppressionReasonLabel(entry.reason)}</td>
+          <td data-label="Zakres">${entry.appliesTo === 'marketing' ? 'tylko marketing' : 'wszystkie maile'}</td>
+          <td data-label="Klient">${escapeHtml(entry.sourceApp || 'wszyscy')}</td>
+          <td data-label="Utworzono">${escapeHtml(entry.createdAt || '-')}</td>
+          <td data-label="Szczegoly">${escapeHtml(entry.details || '-')}</td>
+          <td><button type="button" class="requeue-btn suppression-remove-btn" data-suppression-id="${escapeHtml(entry.id)}">Usun</button></td>
+        </tr>
+      `).join('');
+    }
+
+    function suppressionReasonLabel(reason) {
+      return {
+        bounce: 'odbicie (bounce)',
+        complaint: 'skarga (spam)',
+        unsubscribe: 'wypis z listy',
+        manual: 'reczna blokada'
+      }[reason] || escapeHtml(reason || '-');
+    }
+
+    els.suppressionAddBtn?.addEventListener('click', async () => {
+      const email = els.suppressionEmail.value.trim();
+      if (!email) {
+        showError('Podaj adres email do zablokowania.');
+        return;
+      }
+      els.suppressionAddBtn.disabled = true;
+      try {
+        await apiPost('/admin/suppressions', {
+          email,
+          reason: 'manual',
+          appliesTo: els.suppressionScope.value,
+          sourceApp: els.suppressionSourceApp.value.trim()
+        });
+        els.suppressionEmail.value = '';
+        els.suppressionSourceApp.value = '';
+        await refreshAll();
+      } catch (error) {
+        showError(error.message || 'Nie udalo sie dodac supresji.');
+      } finally {
+        els.suppressionAddBtn.disabled = false;
+      }
+    });
+
+    els.suppressionRows?.addEventListener('click', async (event) => {
+      const button = event.target.closest('.suppression-remove-btn');
+      if (!button) return;
+      if (!confirm('Usunac adres z listy supresji? Wiadomosci do tego adresu znow beda wysylane.')) return;
+      button.disabled = true;
+      try {
+        await apiDelete(`/admin/suppressions/${encodeURIComponent(button.dataset.suppressionId)}`);
+        await refreshAll();
+      } catch (error) {
+        showError(error.message || 'Nie udalo sie usunac supresji.');
+        button.disabled = false;
+      }
+    });
+
+    async function apiDelete(path) {
+      const response = await fetch(path, {
+        method: 'DELETE',
+        headers: { 'X-Admin-Key': adminKey, 'Accept': 'application/json' }
+      });
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : {};
+      if (!response.ok) {
+        throw new Error(errorLabel(payload.message || payload.error, response.status));
+      }
+      return payload;
+    }
+
     function statusPill(status) {
-      const cls = status === 'failed' ? 'bad' : status === 'retry' ? 'warn' : status === 'processing' ? 'info' : 'ok';
+      const cls = status === 'failed' || status === 'unknown' ? 'bad' : status === 'retry' ? 'warn' : status === 'processing' ? 'info' : 'ok';
       return `<span class="pill ${cls}">${statusLabel(status)}</span>`;
     }
 
@@ -1058,7 +1223,8 @@
         processing: 'wysylanie',
         retry: 'ponowna proba',
         sent: 'wyslane',
-        failed: 'nieudane'
+        failed: 'nieudane',
+        unknown: 'nieznany wynik'
       }[status] || escapeHtml(status || '-');
     }
 

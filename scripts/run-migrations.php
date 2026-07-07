@@ -169,6 +169,9 @@ function migrationLooksApplied(PDO $pdo, string $migration): bool
         '006_add_inline_attachment_content_id.sql' => columnExists($pdo, 'email_attachments', 'content_id'),
         '007_add_worker_heartbeats_observability.sql' => tableExists($pdo, 'email_worker_heartbeats')
             && indexExists($pdo, 'email_queue', 'idx_email_queue_claim_pending_due'),
+        '008_add_unknown_status.sql' => columnTypeContains($pdo, 'email_queue', 'status', 'unknown'),
+        '009_add_category_and_suppressions.sql' => columnExists($pdo, 'email_queue', 'category')
+            && tableExists($pdo, 'email_suppressions'),
         default => false,
     };
 }

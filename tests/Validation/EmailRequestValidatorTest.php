@@ -98,6 +98,90 @@ final class EmailRequestValidatorTest extends TestCase
         self::assertSame('technical', $result['priority']);
     }
 
+    public function testSingleEmailDefaultsToTransactionalCategory(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateQueuePayload([
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'Subject',
+            'html' => '<p>Body</p>',
+        ]);
+
+        self::assertSame('transactional', $result['category']);
+    }
+
+    public function testAcceptsExplicitMarketingCategory(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateQueuePayload([
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'Subject',
+            'html' => '<p>Body</p>',
+            'category' => 'marketing',
+        ]);
+
+        self::assertSame('marketing', $result['category']);
+    }
+
+    public function testTechnicalPriorityForcesTransactionalCategory(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateQueuePayload([
+            'to' => 'developer@internal.test',
+            'subject' => 'Technical alert',
+            'html' => '<p>Alert</p>',
+            'priority' => 'technical',
+            'category' => 'marketing',
+        ]);
+
+        self::assertSame('transactional', $result['category']);
+    }
+
+    public function testRejectsInvalidCategory(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Category must be transactional or marketing');
+
+        $validator->validateQueuePayload([
+            'to' => 'recipient@deliverable.test',
+            'subject' => 'Subject',
+            'html' => '<p>Body</p>',
+            'category' => 'newsletter',
+        ]);
+    }
+
+    public function testBatchDefaultsToMarketingCategory(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Newsletter',
+            'html' => '<p>News</p>',
+            'recipients' => [['to' => 'recipient@deliverable.test']],
+        ]);
+
+        self::assertSame('marketing', $result['category']);
+    }
+
+    public function testBatchCanOptIntoTransactionalCategory(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Invoices',
+            'html' => '<p>Invoice</p>',
+            'category' => 'transactional',
+            'recipients' => [['to' => 'recipient@deliverable.test']],
+        ]);
+
+        self::assertSame('transactional', $result['category']);
+    }
+
     public function testAcceptsInlineAttachmentFlagWithContentId(): void
     {
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));

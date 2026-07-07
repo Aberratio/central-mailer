@@ -10,6 +10,7 @@ use CentralMailer\Http\ApiVersion;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\RateLimitRepository;
 use CentralMailer\Queue\WorkerHeartbeatRepository;
+use CentralMailer\Suppression\SuppressionRepository;
 use PDO;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -23,7 +24,8 @@ final class AdminController
         private readonly EmailQueueRepository $repository,
         private readonly RateLimitRepository $rateLimitRepository,
         private readonly WorkerHeartbeatRepository $heartbeatRepository,
-        private readonly Env $env
+        private readonly Env $env,
+        private readonly ?SuppressionRepository $suppressions = null
     ) {
     }
 
@@ -61,6 +63,7 @@ final class AdminController
             'staleProcessingCount' => $this->repository->staleProcessingCount($now),
         ];
         $rateLimit = $this->rateLimitRepository->globalUsage($globalLimit, $globalSince, $globalWindowMinutes);
+        $failuresSince = (new \DateTimeImmutable('-24 hours'))->format('Y-m-d H:i:s');
 
         return $this->json([
             'generatedAt' => $now,
@@ -78,6 +81,10 @@ final class AdminController
                 'bySourceApp' => $this->repository->statusCountsBySourceApp(),
             ],
             'backlog' => $backlog,
+            'failures' => [
+                'since' => $failuresSince,
+                'errorCodes' => $this->repository->errorCodeCountsSince($failuresSince),
+            ],
             'rateLimit' => [
                 'global' => $rateLimit,
             ],
@@ -136,6 +143,79 @@ final class AdminController
         ]);
     }
 
+    public function suppressions(ServerRequestInterface $request): ResponseInterface
+    {
+        if ($this->suppressions === null) {
+            return $this->json(['error' => 'suppressions_unavailable'], 503);
+        }
+        $query = $request->getQueryParams();
+        $limit = min(1000, max(1, isset($query['limit']) ? (int) $query['limit'] : 500));
+
+        return $this->json([
+            'generatedAt' => self::now(),
+            'suppressions' => array_map(static fn (array $row): array => [
+                'id' => $row['id'],
+                'email' => $row['email'],
+                'sourceApp' => $row['source_app'] === '' ? null : $row['source_app'],
+                'reason' => $row['reason'],
+                'appliesTo' => $row['applies_to'],
+                'originEmailId' => $row['origin_email_id'],
+                'details' => $row['details'],
+                'createdAt' => $row['created_at'],
+            ], $this->suppressions->all($limit)),
+        ]);
+    }
+
+    public function addSuppression(ServerRequestInterface $request): ResponseInterface
+    {
+        if ($this->suppressions === null) {
+            return $this->json(['error' => 'suppressions_unavailable'], 503);
+        }
+        $body = (array) $request->getParsedBody();
+        $email = trim((string) ($body['email'] ?? ''));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return $this->json(['error' => 'invalid_email', 'message' => 'Email address is invalid'], 400);
+        }
+        $reason = (string) ($body['reason'] ?? 'manual');
+        $appliesTo = (string) ($body['appliesTo'] ?? 'all');
+        $sourceApp = trim((string) ($body['sourceApp'] ?? ''));
+        try {
+            $created = $this->suppressions->add($email, $reason, $appliesTo, $sourceApp);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->json(['error' => 'invalid_suppression', 'message' => $exception->getMessage()], 400);
+        }
+
+        return $this->json(['email' => mb_strtolower($email), 'created' => $created], $created ? 201 : 200);
+    }
+
+    /** @param array<string, string> $args */
+    public function removeSuppression(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        if ($this->suppressions === null) {
+            return $this->json(['error' => 'suppressions_unavailable'], 503);
+        }
+        $id = (string) ($args['id'] ?? '');
+        if ($id === '' || !$this->suppressions->remove($id)) {
+            return $this->json(['error' => 'not_found', 'message' => 'Suppression does not exist'], 404);
+        }
+
+        return $this->json(['id' => $id, 'removed' => true]);
+    }
+
+    /** @param array<string, string> $args */
+    public function requeue(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $id = (string) ($args['id'] ?? '');
+        if ($id === '' || !$this->repository->requeueUnknown($id)) {
+            return $this->json([
+                'error' => 'not_requeueable',
+                'message' => 'Email does not exist or is not in unknown status',
+            ], 409);
+        }
+
+        return $this->json(['id' => $id, 'status' => 'pending']);
+    }
+
     /** @param array<string, int> $statusCounts @param array<string, mixed> $backlog @param array<string, mixed> $rateLimit @param array{standard: int, technical: int} $workerCounts @return list<array<string, mixed>> */
     private function issues(array $statusCounts, array $backlog, array $rateLimit, array $workerCounts): array
     {
@@ -166,6 +246,16 @@ final class AdminController
                 'title' => 'Wiadomosci utknely w przetwarzaniu',
                 'message' => 'Czesc wiadomosci ma wygasnieta dzierzawe przetwarzania. Worker powinien je zwolnic przy kolejnym przebiegu.',
                 'count' => $backlog['staleProcessingCount'],
+            ];
+        }
+        if (($statusCounts['unknown'] ?? 0) > 0) {
+            $issues[] = [
+                'severity' => 'critical',
+                'label' => 'Krytyczny',
+                'type' => 'unknown_emails',
+                'title' => 'Wiadomosci w kwarantannie (nieznany wynik wysylki)',
+                'message' => 'Proba wysylki mogla dotrzec do serwera SMTP, ale wynik jest nieznany. Sprawdz logi i skrzynke nadawcy, a potem uzyj przycisku ponownego kolejkowania.',
+                'count' => $statusCounts['unknown'],
             ];
         }
         if (($statusCounts['failed'] ?? 0) > 0) {

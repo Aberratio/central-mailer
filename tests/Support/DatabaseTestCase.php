@@ -41,6 +41,7 @@ abstract class DatabaseTestCase extends TestCase
             'html_body' => '<p>Body</p>',
             'text_body' => 'Body',
             'priority' => 'normal',
+            'category' => 'transactional',
             'metadata' => null,
             'status' => 'pending',
             'lease_id' => null,
@@ -58,10 +59,10 @@ abstract class DatabaseTestCase extends TestCase
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
-             (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body, text_body, priority, metadata, status,
+             (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body, text_body, priority, category, metadata, status,
               lease_id, lease_expires_at, attempts, max_attempts, next_attempt_at, last_error, provider_message_id, created_at, updated_at, sent_at)
              VALUES
-             (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body, :text_body, :priority, :metadata, :status,
+             (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :metadata, :status,
               :lease_id, :lease_expires_at, :attempts, :max_attempts, :next_attempt_at, :last_error, :provider_message_id, :created_at, :updated_at, :sent_at)'
         );
         $stmt->execute($row);
@@ -93,6 +94,7 @@ abstract class DatabaseTestCase extends TestCase
                 html_body TEXT NULL,
                 text_body TEXT NULL,
                 priority TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT \'transactional\',
                 metadata TEXT NULL,
                 status TEXT NOT NULL,
                 lease_id TEXT NULL,
@@ -205,6 +207,19 @@ abstract class DatabaseTestCase extends TestCase
                 source_app TEXT NOT NULL,
                 reserved_at TEXT NOT NULL
             )'
+        );
+        $this->pdo->exec(
+            "CREATE TABLE email_suppressions (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                source_app TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL,
+                applies_to TEXT NOT NULL DEFAULT 'all',
+                origin_email_id TEXT NULL,
+                details TEXT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (email, source_app, applies_to)
+            )"
         );
         $this->pdo->exec(
             'CREATE TABLE email_worker_heartbeats (
