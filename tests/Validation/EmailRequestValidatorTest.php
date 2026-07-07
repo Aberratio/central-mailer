@@ -168,6 +168,22 @@ final class EmailRequestValidatorTest extends TestCase
         self::assertSame('marketing', $result['category']);
     }
 
+    public function testBatchDefaultCategoryIsConfigurableViaEnv(): void
+    {
+        $validator = new EmailRequestValidator(new Env([
+            'EMAIL_VALIDATE_RECIPIENT_MX' => 'false',
+            'EMAIL_BATCH_DEFAULT_CATEGORY' => 'transactional',
+        ]));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Wyniki zawodow',
+            'html' => '<p>Wyniki</p>',
+            'recipients' => [['to' => 'recipient@deliverable.test']],
+        ]);
+
+        self::assertSame('transactional', $result['category']);
+    }
+
     public function testBatchCanOptIntoTransactionalCategory(): void
     {
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));

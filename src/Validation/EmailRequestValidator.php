@@ -85,8 +85,13 @@ final class EmailRequestValidator
             throw new \InvalidArgumentException('Recipient at index 0 must be an object');
         }
 
-        // Batches are the bulk path: unless the caller explicitly marks them transactional,
-        // they get the marketing category (and with it the unsubscribe machinery).
+        // Batches are the bulk path: unless the caller explicitly sets a category, they get
+        // EMAIL_BATCH_DEFAULT_CATEGORY - `marketing` (unsubscribe machinery) by default,
+        // `transactional` for installations that only send system mail.
+        $defaultBatchCategory = $this->env->string('EMAIL_BATCH_DEFAULT_CATEGORY', 'marketing');
+        if (!in_array($defaultBatchCategory, ['transactional', 'marketing'], true)) {
+            throw new \InvalidArgumentException('EMAIL_BATCH_DEFAULT_CATEGORY must be transactional or marketing');
+        }
         $common = $this->validateQueuePayload([
             'to' => $firstRecipient['to'] ?? null,
             'subject' => $payload['subject'] ?? null,
@@ -96,7 +101,7 @@ final class EmailRequestValidator
             'category' => $payload['category'] ?? null,
             'metadata' => $payload['metadata'] ?? null,
             'attachments' => $payload['attachments'] ?? [],
-        ], 'marketing');
+        ], $defaultBatchCategory);
         unset($common['to'], $common['attachments']);
         $commonAttachments = $this->attachments($payload['attachments'] ?? []);
 

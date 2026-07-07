@@ -485,8 +485,12 @@ leverage of all.
 
 Every email has a `category`: `transactional` (default for `POST /emails` and all `technical` mail)
 or `marketing` (default for `POST /emails/batch`; batches can opt out with `"category": "transactional"`).
+An installation that sends **only** system/transactional mail can set
+`EMAIL_BATCH_DEFAULT_CATEGORY=transactional` - batches then skip the unsubscribe machinery and
+`UNSUBSCRIBE_SECRET` stops being required in production.
 Marketing mail automatically gets `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
-headers once `UNSUBSCRIBE_SECRET` (32+ chars, required in production) is configured; links point to
+headers once `UNSUBSCRIBE_SECRET` (32+ chars, required in production for marketing installations) is
+configured; links point to
 `PUBLIC_BASE_URL` (falls back to `APP_URL`) + `/unsubscribe`. The endpoint is public, idempotent and
 uses stateless HMAC tokens with no expiry (links from months-old emails must keep working). Rotate the
 secret via `UNSUBSCRIBE_SECRET_PREVIOUS`.
