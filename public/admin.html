@@ -192,10 +192,11 @@
     }
 
     .metric {
-      padding: 14px;
-      min-height: 96px;
+      padding: 10px 12px;
+      min-height: 68px;
       display: grid;
       align-content: space-between;
+      gap: 4px;
     }
 
     .metric .label {
@@ -205,7 +206,7 @@
     }
 
     .metric .value {
-      font-size: 30px;
+      font-size: 24px;
       font-weight: 800;
       line-height: 1;
     }
@@ -215,13 +216,13 @@
       align-items: flex-start;
       justify-content: space-between;
       gap: 14px;
-      min-height: 96px;
-      padding: 16px;
+      min-height: 68px;
+      padding: 12px 16px;
     }
 
     .health-main {
       display: grid;
-      gap: 7px;
+      gap: 4px;
     }
 
     .pill {
@@ -320,6 +321,44 @@
       height: 100%;
       width: 0%;
       background: #1d4f91;
+    }
+
+    details.collapse > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      user-select: none;
+    }
+
+    details.collapse > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.collapse > summary h2 {
+      margin-bottom: 0;
+    }
+
+    details.collapse > summary::after {
+      content: '';
+      flex: 0 0 auto;
+      width: 9px;
+      height: 9px;
+      margin-right: 4px;
+      border-right: 2px solid var(--muted);
+      border-bottom: 2px solid var(--muted);
+      transform: rotate(45deg);
+      transition: transform 0.15s ease;
+    }
+
+    details.collapse[open] > summary::after {
+      transform: rotate(-135deg);
+    }
+
+    details.collapse[open] > summary {
+      margin-bottom: 12px;
     }
 
     .filters {
@@ -460,12 +499,12 @@
         flex: 1 1 130px;
       }
       .status-strip {
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
       }
       .metric {
-        min-height: 84px;
-        padding: 12px;
+        min-height: 58px;
+        padding: 8px 10px;
       }
       .filters {
         grid-template-columns: 1fr;
@@ -474,7 +513,7 @@
         grid-template-columns: 1fr;
       }
       .metric .value {
-        font-size: 26px;
+        font-size: 20px;
       }
       .kv {
         grid-template-columns: 1fr;
@@ -536,7 +575,10 @@
         padding: 10px;
       }
       .status-strip {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr 1fr;
+      }
+      .health {
+        grid-column: 1 / -1;
       }
       .toolbar {
         display: grid;
@@ -546,7 +588,7 @@
         width: 100%;
       }
       .metric {
-        min-height: 76px;
+        min-height: 54px;
       }
       td {
         grid-template-columns: 1fr;
@@ -602,6 +644,7 @@
             <span id="healthPill" class="pill info">Ladowanie</span>
             <h2 id="healthTitle">Status systemu</h2>
             <p class="subtle" id="healthChecks">Pobieram dane z API.</p>
+            <p class="subtle" id="workerActivity"></p>
           </div>
           <div class="subtle mono" id="apiVersion"></div>
         </div>
@@ -646,8 +689,10 @@
       </section>
 
       <section class="panel">
-        <h2>Skonfigurowane mailery</h2>
-        <div id="mailers" class="mailer-list"></div>
+        <details id="mailersDetails" class="collapse">
+          <summary><h2>Skonfigurowane mailery</h2></summary>
+          <div id="mailers" class="mailer-list"></div>
+        </details>
       </section>
 
       <section class="panel">
@@ -773,6 +818,7 @@
       healthPill: document.getElementById('healthPill'),
       healthTitle: document.getElementById('healthTitle'),
       healthChecks: document.getElementById('healthChecks'),
+      workerActivity: document.getElementById('workerActivity'),
       apiVersion: document.getElementById('apiVersion'),
       countPending: document.getElementById('countPending'),
       countProcessing: document.getElementById('countProcessing'),
@@ -790,6 +836,7 @@
       workers: document.getElementById('workers'),
       clients: document.getElementById('clients'),
       mailers: document.getElementById('mailers'),
+      mailersDetails: document.getElementById('mailersDetails'),
       unsentTab: document.getElementById('unsentTab'),
       sentTab: document.getElementById('sentTab'),
       unsentPanel: document.getElementById('unsentPanel'),
@@ -843,6 +890,11 @@
     els.sentSearchFilter.addEventListener('input', renderSent);
     els.unsentTab.addEventListener('click', () => setMessageTab('unsent'));
     els.sentTab.addEventListener('click', () => setMessageTab('sent'));
+
+    els.mailersDetails.open = localStorage.getItem('centralMailerMailersOpen') === '1';
+    els.mailersDetails.addEventListener('toggle', () => {
+      localStorage.setItem('centralMailerMailersOpen', els.mailersDetails.open ? '1' : '0');
+    });
 
     function persistKey() {
       sessionStorage.setItem('centralMailerAdminKey', adminKey);
@@ -915,6 +967,12 @@
       els.healthPill.textContent = healthStatus === 'ok' ? 'SPRAWNY' : 'PROBLEM';
       els.healthTitle.textContent = healthStatus === 'ok' ? 'System dziala poprawnie' : 'System wymaga uwagi';
       els.healthChecks.textContent = `Baza danych: ${checkLabel(health.checks?.database)} | Zalaczniki: ${checkLabel(health.checks?.attachments)} | Workery: ${checkLabel(health.checks?.workers)}`;
+      const lastActivity = data.workers?.lastActivity || {};
+      const lastRun = latestTimestamp(lastActivity.standard?.lastSeenAt, lastActivity.technical?.lastSeenAt);
+      const lastSent = latestTimestamp(lastActivity.standard?.lastProcessedAt, lastActivity.technical?.lastProcessedAt);
+      const lastRunAgo = lastRun ? agoLabel(lastRun, data.generatedAt) : null;
+      const lastSentAgo = lastSent ? agoLabel(lastSent, data.generatedAt) : null;
+      els.workerActivity.textContent = `Ostatni przebieg workera: ${lastRun ? `${lastRun}${lastRunAgo ? ` (${lastRunAgo})` : ''}` : 'brak danych'} | ostatnia wysylka: ${lastSent ? `${lastSent}${lastSentAgo ? ` (${lastSentAgo})` : ''}` : 'brak'}`;
       els.apiVersion.textContent = health.apiVersion ? `Wersja API ${health.apiVersion}` : '';
       els.countPending.textContent = counts.pending || 0;
       els.countProcessing.textContent = counts.processing || 0;
@@ -925,7 +983,7 @@
       renderIssues(data.issues || []);
       renderRateLimit(data.rateLimit?.global || {});
       renderBacklog(data.backlog || {}, data.failures || {});
-      renderWorkers(data.workers || {});
+      renderWorkers(data.workers || {}, data.generatedAt);
       renderClients(data.statusCounts?.bySourceApp || []);
       renderMailers(data.mailers || []);
     }
@@ -970,16 +1028,19 @@
       `;
     }
 
-    function renderWorkers(workers) {
+    function renderWorkers(workers, generatedAt) {
       const active = workers.active || [];
+      const lastActivity = workers.lastActivity || {};
       const badges = `
         <div class="row-item">
           <div class="row-head">
             <span>Worker standardowy</span><span class="pill ${workers.standardActive ? 'ok' : 'bad'}">${workers.standardActive ? 'aktywny' : 'brak heartbeat'}</span>
           </div>
+          <div class="muted-line">${workerActivityLine(lastActivity.standard, generatedAt)}</div>
           <div class="row-head">
             <span>Worker techniczny</span><span class="pill ${workers.technicalActive ? 'ok' : 'bad'}">${workers.technicalActive ? 'aktywny' : 'brak heartbeat'}</span>
           </div>
+          <div class="muted-line">${workerActivityLine(lastActivity.technical, generatedAt)}</div>
           <div class="muted-line">Worker jest uznany za aktywny, jesli wyslal heartbeat w ostatnich ${workers.heartbeatFreshSeconds || '-'} sekundach.</div>
         </div>
       `;
@@ -998,6 +1059,32 @@
         </div>
       `).join('');
       els.workers.innerHTML = badges + (rows || '<div class="empty">Brak aktywnych heartbeatow.</div>');
+    }
+
+    function workerActivityLine(activity, generatedAt) {
+      const lastRun = timestampWithAgo(activity?.lastSeenAt, generatedAt);
+      const lastSent = timestampWithAgo(activity?.lastProcessedAt, generatedAt);
+      return `Ostatni przebieg: ${lastRun || 'brak danych'} | ostatnia wysylka: ${lastSent || 'brak'}`;
+    }
+
+    function timestampWithAgo(value, reference) {
+      if (!value) return null;
+      const ago = agoLabel(value, reference);
+      return `${escapeHtml(value)}${ago ? ` (${ago})` : ''}`;
+    }
+
+    function latestTimestamp(a, b) {
+      if (!a) return b || null;
+      if (!b) return a;
+      return a >= b ? a : b;
+    }
+
+    function agoLabel(value, reference) {
+      const ts = Date.parse(String(value).replace(' ', 'T'));
+      const ref = reference ? Date.parse(String(reference).replace(' ', 'T')) : Date.now();
+      if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
+      const seconds = Math.max(0, Math.round((ref - ts) / 1000));
+      return `${formatDuration(seconds)} temu`;
     }
 
     function renderClients(clients) {

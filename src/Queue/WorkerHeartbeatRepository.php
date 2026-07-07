@@ -86,6 +86,31 @@ final class WorkerHeartbeatRepository
         return $stmt->fetchAll();
     }
 
+    /** @return array{standard: array{lastSeenAt: string|null, lastProcessedAt: string|null}, technical: array{lastSeenAt: string|null, lastProcessedAt: string|null}} */
+    public function lastActivityByQueue(): array
+    {
+        $stmt = $this->pdo->query(
+            'SELECT queue, MAX(last_seen_at) AS last_seen_at, MAX(last_processed_at) AS last_processed_at
+             FROM email_worker_heartbeats
+             GROUP BY queue'
+        );
+        $activity = [
+            'standard' => ['lastSeenAt' => null, 'lastProcessedAt' => null],
+            'technical' => ['lastSeenAt' => null, 'lastProcessedAt' => null],
+        ];
+        foreach ($stmt->fetchAll() as $row) {
+            $queue = (string) $row['queue'];
+            if (array_key_exists($queue, $activity)) {
+                $activity[$queue] = [
+                    'lastSeenAt' => $row['last_seen_at'],
+                    'lastProcessedAt' => $row['last_processed_at'],
+                ];
+            }
+        }
+
+        return $activity;
+    }
+
     /** @return array{standard: int, technical: int} */
     public function activeCountsSince(string $freshSince): array
     {
