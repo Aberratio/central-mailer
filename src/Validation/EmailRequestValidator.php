@@ -18,18 +18,22 @@ final class EmailRequestValidator
         'example.org',
     ];
 
+    /** @var array<string, bool> per-request DNS verdict cache; a 1000-recipient batch shares domains */
+    private array $domainVerdicts = [];
+
     public function __construct(private readonly Env $env)
     {
     }
 
     /** @param array<string, mixed> $payload */
-    public function validateQueuePayload(array $payload): array
+    public function validateQueuePayload(array $payload, string $defaultCategory = 'transactional'): array
     {
         $to = $this->email($payload['to'] ?? null);
         $subject = $this->requiredString($payload['subject'] ?? null, 'subject');
         $html = $this->requiredString($payload['html'] ?? null, 'html');
         $text = $this->optionalString($payload['text'] ?? null, 'text');
         $priority = $this->priority($payload['priority'] ?? 'normal');
+        $category = $this->category($payload['category'] ?? null, $priority, $defaultCategory);
         $metadata = $payload['metadata'] ?? null;
         $attachments = $this->attachments($payload['attachments'] ?? []);
 
@@ -58,6 +62,7 @@ final class EmailRequestValidator
             'html' => $html,
             'text' => $text,
             'priority' => $priority,
+            'category' => $category,
             'metadata' => $metadata,
             'attachments' => $attachments,
         ];
@@ -80,15 +85,18 @@ final class EmailRequestValidator
             throw new \InvalidArgumentException('Recipient at index 0 must be an object');
         }
 
+        // Batches are the bulk path: unless the caller explicitly marks them transactional,
+        // they get the marketing category (and with it the unsubscribe machinery).
         $common = $this->validateQueuePayload([
             'to' => $firstRecipient['to'] ?? null,
             'subject' => $payload['subject'] ?? null,
             'html' => $payload['html'] ?? null,
             'text' => $payload['text'] ?? null,
             'priority' => $payload['priority'] ?? 'normal',
+            'category' => $payload['category'] ?? null,
             'metadata' => $payload['metadata'] ?? null,
             'attachments' => $payload['attachments'] ?? [],
-        ]);
+        ], 'marketing');
         unset($common['to'], $common['attachments']);
         $commonAttachments = $this->attachments($payload['attachments'] ?? []);
 
@@ -151,6 +159,24 @@ final class EmailRequestValidator
         return $value;
     }
 
+    private function category(mixed $value, string $priority, string $default): string
+    {
+        // Technical mail is system-to-system by definition.
+        if ($priority === 'technical') {
+            return 'transactional';
+        }
+
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        if (!is_string($value) || !in_array($value, ['transactional', 'marketing'], true)) {
+            throw new \InvalidArgumentException('Category must be transactional or marketing');
+        }
+
+        return $value;
+    }
+
     private function email(mixed $value): string
     {
         $email = $this->requiredString($value, 'to');
@@ -174,6 +200,25 @@ final class EmailRequestValidator
             return;
         }
 
+        if (array_key_exists($domain, $this->domainVerdicts)) {
+            if (!$this->domainVerdicts[$domain]) {
+                throw new \InvalidArgumentException('Recipient email domain cannot receive email');
+            }
+
+            return;
+        }
+
+        try {
+            $this->checkDomainDns($domain);
+            $this->domainVerdicts[$domain] = true;
+        } catch (\InvalidArgumentException $exception) {
+            $this->domainVerdicts[$domain] = false;
+            throw $exception;
+        }
+    }
+
+    private function checkDomainDns(string $domain): void
+    {
         $mxRecords = dns_get_record($domain, DNS_MX) ?: [];
         foreach ($mxRecords as $record) {
             $target = strtolower(rtrim((string) ($record['target'] ?? ''), '.'));

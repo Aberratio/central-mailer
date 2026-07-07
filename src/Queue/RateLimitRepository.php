@@ -43,13 +43,15 @@ final class RateLimitRepository
             $delete->execute(['cleanup_since' => $cleanupSince]);
 
             $countStmt = $this->pdo->prepare(
-                'SELECT COUNT(*) FROM email_rate_limit_reservations WHERE reserved_at >= :since'
+                "SELECT COUNT(*) FROM email_rate_limit_reservations
+                 WHERE reserved_at >= :since AND source_app NOT LIKE 'provider:%'"
             );
             $countStmt->execute(['since' => $since]);
             $count = (int) $countStmt->fetchColumn();
             if ($count >= $limit) {
                 $retryAfter = $this->retryAfterForWindow(
-                    'SELECT MIN(reserved_at) FROM email_rate_limit_reservations WHERE reserved_at >= :since',
+                    "SELECT MIN(reserved_at) FROM email_rate_limit_reservations
+                     WHERE reserved_at >= :since AND source_app NOT LIKE 'provider:%'",
                     ['since' => $since],
                     $windowMinutes
                 );
@@ -103,11 +105,68 @@ final class RateLimitRepository
         }
     }
 
+    /**
+     * Reserves a slot in a dedicated scope (e.g. "provider:gmail") tracked in the same
+     * reservations table but excluded from the global window.
+     */
+    public function tryReserveScope(
+        string $scope,
+        int $limit,
+        string $since,
+        int $windowMinutes
+    ): RateLimitDecision {
+        $now = self::now();
+        $this->pdo->beginTransaction();
+
+        try {
+            $lock = $this->pdo->prepare('UPDATE email_rate_limit_lock SET updated_at = :updated_at WHERE id = 1');
+            $lock->execute(['updated_at' => $now]);
+
+            $countStmt = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM email_rate_limit_reservations
+                 WHERE source_app = :scope AND reserved_at >= :since'
+            );
+            $countStmt->execute(['scope' => $scope, 'since' => $since]);
+            $count = (int) $countStmt->fetchColumn();
+            if ($count >= $limit) {
+                $retryAfter = $this->retryAfterForWindow(
+                    'SELECT MIN(reserved_at) FROM email_rate_limit_reservations
+                     WHERE source_app = :scope AND reserved_at >= :since',
+                    ['scope' => $scope, 'since' => $since],
+                    $windowMinutes
+                );
+                $this->pdo->commit();
+
+                return RateLimitDecision::denied('provider', $retryAfter, $count, $limit);
+            }
+
+            $insert = $this->pdo->prepare(
+                'INSERT INTO email_rate_limit_reservations (id, source_app, reserved_at)
+                 VALUES (:id, :source_app, :reserved_at)'
+            );
+            $insert->execute([
+                'id' => Uuid::v4(),
+                'source_app' => $scope,
+                'reserved_at' => $now,
+            ]);
+            $this->pdo->commit();
+
+            return RateLimitDecision::allowed($count + 1, $limit);
+        } catch (\Throwable $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
     /** @return array{used: int, limit: int, remaining: int, retryAfter: string|null} */
     public function globalUsage(int $limit, string $since, int $windowMinutes): array
     {
         $countStmt = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM email_rate_limit_reservations WHERE reserved_at >= :since'
+            "SELECT COUNT(*) FROM email_rate_limit_reservations
+             WHERE reserved_at >= :since AND source_app NOT LIKE 'provider:%'"
         );
         $countStmt->execute(['since' => $since]);
         $used = (int) $countStmt->fetchColumn();

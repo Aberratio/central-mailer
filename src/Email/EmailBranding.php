@@ -27,7 +27,8 @@ final class EmailBranding
             $message->subject,
             $html,
             $text,
-            $message->attachments
+            $message->attachments,
+            $message->headers
         );
     }
 

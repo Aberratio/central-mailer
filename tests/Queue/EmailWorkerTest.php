@@ -10,9 +10,12 @@ use CentralMailer\Email\EmailBranding;
 use CentralMailer\Email\EmailMessage;
 use CentralMailer\Email\EmailProviderInterface;
 use CentralMailer\Email\EmailSendResult;
+use CentralMailer\Email\PermanentSendException;
+use CentralMailer\Email\TransientSendException;
 use CentralMailer\Queue\EmailWorker;
 use CentralMailer\Queue\RateLimiter;
 use CentralMailer\Queue\RateLimitRepository;
+use CentralMailer\Suppression\SuppressionRepository;
 use CentralMailer\Support\Uuid;
 use CentralMailer\Tests\Support\DatabaseTestCase;
 use Psr\Log\NullLogger;
@@ -29,6 +32,7 @@ final class EmailWorkerTest extends DatabaseTestCase
         ]);
         $env = new Env([
             'EMAIL_PROCESSING_TIMEOUT_SECONDS' => '120',
+            'SMTP_TIMEOUT_SECONDS' => '5',
             'EMAIL_RATE_LIMIT_COUNT' => '0',
         ]);
         $provider = new class implements EmailProviderInterface {
@@ -489,6 +493,347 @@ final class EmailWorkerTest extends DatabaseTestCase
         $row = $this->fetchQueueRow($technicalId);
         self::assertSame('technical', $row['priority']);
         self::assertSame('failed', $row['status']);
+    }
+
+    public function testPermanentSendErrorFailsImmediatelyWithoutRetries(): void
+    {
+        $id = $this->insertQueueRow(['id' => 'permanent-fail']);
+        $provider = new class implements EmailProviderInterface {
+            public int $sendCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sendCount++;
+
+                throw new PermanentSendException('550 5.1.1 no such user', 550, '5.1.1', true);
+            }
+        };
+
+        $this->worker($provider)->runOnce();
+
+        $row = $this->fetchQueueRow($id);
+        self::assertSame(1, $provider->sendCount);
+        self::assertSame('failed', $row['status']);
+        self::assertSame(1, $row['attempts']);
+        self::assertNull($row['next_attempt_at']);
+        self::assertSame('smtp:550:5.1.1', (string) $this->pdo->query(
+            "SELECT error_code FROM email_events WHERE email_id = '$id' AND event_type = 'failed'"
+        )->fetchColumn());
+    }
+
+    public function testTransientSendErrorIsRetriedAsBefore(): void
+    {
+        $id = $this->insertQueueRow(['id' => 'transient-retry']);
+        $provider = new class implements EmailProviderInterface {
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                throw new TransientSendException('421 try again later', 421);
+            }
+        };
+
+        $this->worker($provider)->runOnce();
+
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('retry', $row['status']);
+        self::assertSame(1, $row['attempts']);
+        self::assertNotNull($row['next_attempt_at']);
+    }
+
+    public function testPermanentErrorOnTechnicalQueueSkipsFallbackToStandard(): void
+    {
+        $technicalId = $this->insertQueueRow([
+            'id' => 'technical-permanent',
+            'priority' => 'technical',
+            'max_attempts' => 1,
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                throw new PermanentSendException('550 5.1.1 no such user', 550, '5.1.1', true);
+            }
+        };
+
+        $this->worker($provider, 'technical')->runOnce();
+
+        $row = $this->fetchQueueRow($technicalId);
+        self::assertSame('technical', $row['priority']);
+        self::assertSame('failed', $row['status']);
+        self::assertSame(0, (int) $this->pdo->query(
+            "SELECT COUNT(*) FROM email_events WHERE email_id = '$technicalId' AND event_type = 'technical_fallback'"
+        )->fetchColumn());
+    }
+
+    public function testTechnicalWorkerRespectsGmailDailyCap(): void
+    {
+        $firstId = $this->insertQueueRow([
+            'id' => 'gmail-cap-one',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $secondId = $this->insertQueueRow([
+            'id' => 'gmail-cap-two',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            public int $sendCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sendCount++;
+
+                return new EmailSendResult('<' . $message->id . '@gmail.test>');
+            }
+        };
+
+        $processed = $this->worker($provider, 'technical', [
+            'EMAIL_WORKER_BATCH_SIZE' => '2',
+            'GMAIL_RATE_LIMIT_COUNT' => '1',
+        ])->runOnce();
+
+        self::assertSame(1, $processed);
+        self::assertSame('sent', $this->fetchQueueRow($firstId)['status']);
+
+        $second = $this->fetchQueueRow($secondId);
+        self::assertSame('pending', $second['status']);
+        self::assertNull($second['lease_id']);
+        self::assertNotNull($second['next_attempt_at']);
+    }
+
+    public function testMarketingEmailGetsListUnsubscribeHeaders(): void
+    {
+        $this->insertQueueRow(['id' => 'marketing-headers', 'category' => 'marketing']);
+        $provider = new class implements EmailProviderInterface {
+            public ?EmailMessage $message = null;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->message = $message;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+
+        $this->worker($provider, 'standard', [
+            'UNSUBSCRIBE_SECRET' => str_repeat('s', 32),
+            'APP_URL' => 'https://mailer.example.test',
+        ])->runOnce();
+
+        self::assertNotNull($provider->message);
+        self::assertArrayHasKey('List-Unsubscribe', $provider->message->headers);
+        self::assertStringContainsString('https://mailer.example.test/unsubscribe?token=', $provider->message->headers['List-Unsubscribe']);
+        self::assertSame('List-Unsubscribe=One-Click', $provider->message->headers['List-Unsubscribe-Post']);
+    }
+
+    public function testTransactionalEmailHasNoUnsubscribeHeaders(): void
+    {
+        $this->insertQueueRow(['id' => 'transactional-headers', 'category' => 'transactional']);
+        $provider = new class implements EmailProviderInterface {
+            public ?EmailMessage $message = null;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->message = $message;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+
+        $this->worker($provider, 'standard', [
+            'UNSUBSCRIBE_SECRET' => str_repeat('s', 32),
+            'APP_URL' => 'https://mailer.example.test',
+        ])->runOnce();
+
+        self::assertNotNull($provider->message);
+        self::assertSame([], $provider->message->headers);
+    }
+
+    public function testSuppressedRecipientIsFailedWithoutCallingProvider(): void
+    {
+        $id = $this->insertQueueRow([
+            'id' => 'suppressed-skip',
+            'category' => 'marketing',
+        ]);
+        $suppressions = new SuppressionRepository($this->pdo);
+        $suppressions->add('recipient@deliverable.test', 'unsubscribe', 'marketing', 'app-a');
+        $provider = new class implements EmailProviderInterface {
+            public int $sendCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sendCount++;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '1']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            'standard',
+            null,
+            null,
+            null,
+            null,
+            null,
+            $suppressions
+        );
+
+        $worker->runOnce();
+
+        $row = $this->fetchQueueRow($id);
+        self::assertSame(0, $provider->sendCount);
+        self::assertSame('failed', $row['status']);
+        self::assertSame('Recipient address is suppressed', $row['last_error']);
+    }
+
+    public function testRecipientPermanentErrorAddsBounceSuppression(): void
+    {
+        $this->insertQueueRow(['id' => 'bounce-suppress']);
+        $suppressions = new SuppressionRepository($this->pdo);
+        $provider = new class implements EmailProviderInterface {
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                throw new PermanentSendException('550 5.1.1 no such user', 550, '5.1.1', true);
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '1']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            'standard',
+            null,
+            null,
+            null,
+            null,
+            null,
+            $suppressions
+        );
+
+        $worker->runOnce();
+
+        self::assertTrue($suppressions->isSuppressed('recipient@deliverable.test', 'app-b', 'transactional'));
+        $row = $this->pdo->query('SELECT reason, applies_to, origin_email_id FROM email_suppressions')->fetch();
+        self::assertSame('bounce', $row['reason']);
+        self::assertSame('all', $row['applies_to']);
+        self::assertSame('bounce-suppress', $row['origin_email_id']);
+    }
+
+    public function testRetryBackoffIncludesBoundedJitter(): void
+    {
+        $id = $this->insertQueueRow(['id' => 'jitter-check']);
+        $provider = new class implements EmailProviderInterface {
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                throw new \RuntimeException('Temporary SMTP failure');
+            }
+        };
+
+        $before = new \DateTimeImmutable();
+        $this->worker($provider)->runOnce();
+        $after = new \DateTimeImmutable();
+
+        $row = $this->fetchQueueRow($id);
+        self::assertSame('retry', $row['status']);
+        $nextAttemptAt = new \DateTimeImmutable((string) $row['next_attempt_at']);
+        // First attempt: base backoff 60s plus jitter of up to 30s.
+        self::assertGreaterThanOrEqual($before->modify('+60 seconds')->getTimestamp(), $nextAttemptAt->getTimestamp());
+        self::assertLessThanOrEqual($after->modify('+90 seconds')->getTimestamp(), $nextAttemptAt->getTimestamp());
+    }
+
+    public function testStandardWorkerReleasesRemainingClaimsWhenStopRequested(): void
+    {
+        $firstId = $this->insertQueueRow(['id' => 'stop-one', 'created_at' => '2026-01-01 10:00:00']);
+        $secondId = $this->insertQueueRow(['id' => 'stop-two', 'created_at' => '2026-01-01 10:01:00']);
+        $thirdId = $this->insertQueueRow(['id' => 'stop-three', 'created_at' => '2026-01-01 10:02:00']);
+        $provider = new class implements EmailProviderInterface {
+            public int $sendCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sendCount++;
+
+                return new EmailSendResult('<' . $message->id . '@mailer.test>');
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '3']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            'standard',
+            null,
+            null,
+            null,
+            fn (): bool => $provider->sendCount >= 1
+        );
+
+        $processed = $worker->runOnce();
+
+        self::assertSame(1, $processed);
+        self::assertSame(1, $provider->sendCount);
+        self::assertSame('sent', $this->fetchQueueRow($firstId)['status']);
+        foreach ([$secondId, $thirdId] as $releasedId) {
+            $row = $this->fetchQueueRow($releasedId);
+            self::assertSame('pending', $row['status']);
+            self::assertNull($row['lease_id']);
+            self::assertSame(0, $row['attempts']);
+        }
+    }
+
+    public function testTechnicalWorkerStopsBetweenClaimsWhenStopRequested(): void
+    {
+        $firstId = $this->insertQueueRow([
+            'id' => 'technical-stop-one',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:00:00',
+        ]);
+        $secondId = $this->insertQueueRow([
+            'id' => 'technical-stop-two',
+            'priority' => 'technical',
+            'created_at' => '2026-01-01 10:01:00',
+        ]);
+        $provider = new class implements EmailProviderInterface {
+            public int $sendCount = 0;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->sendCount++;
+
+                return new EmailSendResult('<' . $message->id . '@gmail.test>');
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '2']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            'technical',
+            null,
+            null,
+            null,
+            fn (): bool => $provider->sendCount >= 1
+        );
+
+        $processed = $worker->runOnce();
+
+        self::assertSame(1, $processed);
+        self::assertSame('sent', $this->fetchQueueRow($firstId)['status']);
+        self::assertSame('pending', $this->fetchQueueRow($secondId)['status']);
     }
 
     public function testProviderAcceptanceAfterProcessingTimeoutIsReconciledToSent(): void

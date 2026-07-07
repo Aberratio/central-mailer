@@ -32,9 +32,9 @@ final class EmailQueueRepository
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
-            (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, metadata, status, attempts, max_attempts, created_at, updated_at)
+            (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, category, metadata, status, attempts, max_attempts, created_at, updated_at)
             VALUES
-            (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
+            (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
         );
 
         $this->pdo->beginTransaction();
@@ -57,6 +57,7 @@ final class EmailQueueRepository
                 'html_body' => $data['html'],
                 'text_body' => $data['text'],
                 'priority' => $data['priority'],
+                'category' => $data['category'] ?? 'transactional',
                 'metadata' => $metadata,
                 'max_attempts' => $data['maxAttempts'] ?? 5,
                 'created_at' => $now,
@@ -150,17 +151,20 @@ final class EmailQueueRepository
             $queueStmt = $this->pdo->prepare(
                 'INSERT INTO email_queue
                  (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body,
-                  text_body, priority, metadata, status, attempts, max_attempts, created_at, updated_at)
+                  text_body, priority, category, metadata, status, attempts, max_attempts, last_error, created_at, updated_at)
                  VALUES
                  (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body,
-                  :text_body, :priority, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
+                  :text_body, :priority, :category, :metadata, :status, 0, :max_attempts, :last_error, :created_at, :updated_at)'
             );
+            $suppressedRecipients = $data['suppressedRecipients'] ?? [];
             $emails = [];
             foreach ($data['recipients'] as $index => $recipient) {
                 $emailId = $recipient['id'] ?? Uuid::v4();
                 $recipientMetadata = $recipient['metadata'] === null
                     ? null
                     : json_encode($recipient['metadata'], JSON_THROW_ON_ERROR);
+                $suppressed = in_array(mb_strtolower((string) $recipient['to']), $suppressedRecipients, true);
+                $status = $suppressed ? 'failed' : 'pending';
                 $queueStmt->execute([
                     'id' => $emailId,
                     'source_app' => $data['sourceApp'],
@@ -173,14 +177,21 @@ final class EmailQueueRepository
                     'html_body' => $recipient['html'] ?? null,
                     'text_body' => $recipient['text'] ?? null,
                     'priority' => $data['priority'],
+                    'category' => $data['category'] ?? 'transactional',
                     'metadata' => $recipientMetadata,
+                    'status' => $status,
                     'max_attempts' => $data['maxAttempts'] ?? 5,
+                    'last_error' => $suppressed ? 'Recipient address is suppressed' : null,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
                 $this->insertAttachments($emailId, $recipient['attachments'] ?? [], $now);
-                $this->insertEvent($emailId, 'queued', 'pending', 0, null, null, null, ['batchId' => $batchId], $now);
-                $emails[] = ['id' => $emailId, 'status' => 'pending'];
+                if ($suppressed) {
+                    $this->insertEvent($emailId, 'suppressed', 'failed', 0, 'suppressed', 'Recipient address is suppressed', null, ['batchId' => $batchId], $now);
+                } else {
+                    $this->insertEvent($emailId, 'queued', 'pending', 0, null, null, null, ['batchId' => $batchId], $now);
+                }
+                $emails[] = ['id' => $emailId, 'status' => $status];
             }
             $this->pdo->commit();
 
@@ -222,7 +233,7 @@ final class EmailQueueRepository
     }
 
     /** @return list<array<string, mixed>> */
-    public function findForSourceAppBetween(string $sourceApp, string $from, string $to): array
+    public function findForSourceAppBetween(string $sourceApp, string $from, string $to, int $limit = 500, int $offset = 0): array
     {
         $stmt = $this->pdo->prepare(
             self::statusSelectSql() . '
@@ -231,24 +242,34 @@ final class EmailQueueRepository
              WHERE q.source_app = :source_app
                AND q.created_at >= :from
                AND q.created_at <= :to
-             ORDER BY q.created_at DESC, q.id DESC'
+             ORDER BY q.created_at DESC, q.id DESC
+             LIMIT :limit OFFSET :offset'
         );
-        $stmt->execute(['source_app' => $sourceApp, 'from' => $from, 'to' => $to]);
+        $stmt->bindValue('source_app', $sourceApp);
+        $stmt->bindValue('from', $from);
+        $stmt->bindValue('to', $to);
+        $stmt->bindValue('limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->bindValue('offset', max(0, $offset), PDO::PARAM_INT);
+        $stmt->execute();
 
         return $stmt->fetchAll();
     }
 
     /** @return list<array<string, mixed>> */
-    public function findUnsentForSourceApp(string $sourceApp): array
+    public function findUnsentForSourceApp(string $sourceApp, int $limit = 500, int $offset = 0): array
     {
         $stmt = $this->pdo->prepare(
             self::statusSelectSql() . '
              FROM email_queue q
              LEFT JOIN email_messages m ON m.id = q.message_id
              WHERE q.source_app = :source_app AND q.status <> "sent"
-             ORDER BY q.created_at ASC, q.id ASC'
+             ORDER BY q.created_at ASC, q.id ASC
+             LIMIT :limit OFFSET :offset'
         );
-        $stmt->execute(['source_app' => $sourceApp]);
+        $stmt->bindValue('source_app', $sourceApp);
+        $stmt->bindValue('limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->bindValue('offset', max(0, $offset), PDO::PARAM_INT);
+        $stmt->execute();
 
         return $stmt->fetchAll();
     }
@@ -269,16 +290,21 @@ final class EmailQueueRepository
     }
 
     /** @return list<array<string, mixed>> */
-    public function findBatchEmailsForSourceApp(string $batchId, string $sourceApp): array
+    public function findBatchEmailsForSourceApp(string $batchId, string $sourceApp, int $limit = 1001, int $offset = 0): array
     {
         $stmt = $this->pdo->prepare(
             self::statusSelectSql() . '
              FROM email_queue q
              LEFT JOIN email_messages m ON m.id = q.message_id
              WHERE q.batch_id = :batch_id AND q.source_app = :source_app
-             ORDER BY q.created_at ASC, q.id ASC'
+             ORDER BY q.created_at ASC, q.id ASC
+             LIMIT :limit OFFSET :offset'
         );
-        $stmt->execute(['batch_id' => $batchId, 'source_app' => $sourceApp]);
+        $stmt->bindValue('batch_id', $batchId);
+        $stmt->bindValue('source_app', $sourceApp);
+        $stmt->bindValue('limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->bindValue('offset', max(0, $offset), PDO::PARAM_INT);
+        $stmt->execute();
 
         return $stmt->fetchAll();
     }
@@ -487,7 +513,7 @@ final class EmailQueueRepository
                 ? null
                 : json_decode((string) $latestEvent['details'], true, flags: JSON_THROW_ON_ERROR);
             $isSameLeaseTimeout = $latestEvent !== null
-                && $latestEvent['event_type'] === 'processing_timeout'
+                && in_array($latestEvent['event_type'], ['processing_timeout', 'processing_timeout_unknown'], true)
                 && is_array($timeoutDetails)
                 && ($timeoutDetails['leaseId'] ?? null) === $leaseId;
 
@@ -496,7 +522,7 @@ final class EmailQueueRepository
                     'UPDATE email_queue
                      SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at,
                          next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
-                     WHERE id = :id AND status IN ("retry", "failed") AND provider_message_id IS NULL'
+                     WHERE id = :id AND status IN ("retry", "failed", "unknown") AND provider_message_id IS NULL'
                 );
                 $reconcile->execute([
                     'id' => $id,
@@ -538,10 +564,11 @@ final class EmailQueueRepository
         int $maxAttempts,
         string $error,
         ?string $nextAttemptAt,
-        ?string $errorCode = null
+        ?string $errorCode = null,
+        bool $permanent = false
     ): ?string
     {
-        $status = $attempts < $maxAttempts ? 'retry' : 'failed';
+        $status = !$permanent && $attempts < $maxAttempts ? 'retry' : 'failed';
         $this->pdo->beginTransaction();
         try {
             $stmt = $this->pdo->prepare(
@@ -641,7 +668,7 @@ final class EmailQueueRepository
             ]);
             $staleRows = $select->fetchAll();
 
-            $stmt = $this->pdo->prepare(
+            $retryStmt = $this->pdo->prepare(
                 'UPDATE email_queue
                  SET status = CASE WHEN attempts + 1 >= max_attempts THEN "failed" ELSE "retry" END,
                      attempts = attempts + 1,
@@ -650,19 +677,51 @@ final class EmailQueueRepository
                      updated_at = :updated_at,
                      lease_id = NULL,
                      lease_expires_at = NULL
-                 WHERE status = "processing"
-                   AND (lease_expires_at < :lease_older_than OR (lease_expires_at IS NULL AND updated_at < :updated_older_than))'
+                 WHERE id = :id AND status = "processing"'
+            );
+            $unknownStmt = $this->pdo->prepare(
+                'UPDATE email_queue
+                 SET status = "unknown",
+                     attempts = attempts + 1,
+                     next_attempt_at = NULL,
+                     last_error = :last_error,
+                     updated_at = :updated_at,
+                     lease_id = NULL,
+                     lease_expires_at = NULL
+                 WHERE id = :id AND status = "processing"'
             );
             $now = self::now();
-            $stmt->execute([
-                'next_attempt_at' => $now,
-                'last_error' => mb_substr($error, 0, 2000),
-                'updated_at' => $now,
-                'lease_older_than' => $olderThan,
-                'updated_older_than' => $olderThan,
-            ]);
             foreach ($staleRows as $row) {
                 $attempts = ((int) $row['attempts']) + 1;
+                // If a send attempt was already started under this lease, the email may have
+                // reached the SMTP server; auto-retrying could deliver a duplicate. Quarantine
+                // it as "unknown" until the sending worker reconciles it or an operator decides.
+                if ($this->attemptStartedUnderLease((string) $row['id'], $row['lease_id'])) {
+                    $unknownStmt->execute([
+                        'id' => $row['id'],
+                        'last_error' => mb_substr($error, 0, 2000),
+                        'updated_at' => $now,
+                    ]);
+                    $this->insertEvent(
+                        (string) $row['id'],
+                        'processing_timeout_unknown',
+                        'unknown',
+                        $attempts,
+                        'processing_timeout',
+                        $error,
+                        null,
+                        ['leaseId' => $row['lease_id']],
+                        $now
+                    );
+                    continue;
+                }
+
+                $retryStmt->execute([
+                    'id' => $row['id'],
+                    'next_attempt_at' => $now,
+                    'last_error' => mb_substr($error, 0, 2000),
+                    'updated_at' => $now,
+                ]);
                 $status = $attempts >= (int) $row['max_attempts'] ? 'failed' : 'retry';
                 $this->insertEvent(
                     (string) $row['id'],
@@ -679,6 +738,95 @@ final class EmailQueueRepository
             $this->pdo->commit();
 
             return count($staleRows);
+        } catch (\Throwable $exception) {
+            $this->pdo->rollBack();
+            throw $exception;
+        }
+    }
+
+    private function attemptStartedUnderLease(string $emailId, mixed $leaseId): bool
+    {
+        if ($leaseId === null || $leaseId === '') {
+            return false;
+        }
+
+        $latestEvent = $this->latestEvent($emailId);
+        if ($latestEvent === null || $latestEvent['event_type'] !== 'attempt_started' || $latestEvent['details'] === null) {
+            return false;
+        }
+
+        $details = json_decode((string) $latestEvent['details'], true);
+
+        return is_array($details) && ($details['leaseId'] ?? null) === (string) $leaseId;
+    }
+
+    /** @return list<array{errorCode: string, count: int}> */
+    public function errorCodeCountsSince(string $since, int $limit = 20): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT error_code, COUNT(*) AS count
+             FROM email_events
+             WHERE created_at >= :since
+               AND error_code IS NOT NULL
+               AND event_type IN ("failed", "retry", "suppressed", "bounced")
+             GROUP BY error_code
+             ORDER BY count DESC, error_code ASC
+             LIMIT :limit'
+        );
+        $stmt->bindValue('since', $since);
+        $stmt->bindValue('limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(static fn (array $row): array => [
+            'errorCode' => (string) $row['error_code'],
+            'count' => (int) $row['count'],
+        ], $stmt->fetchAll());
+    }
+
+    public function recordBounce(string $id, ?string $dsnStatus, string $detail): bool
+    {
+        $stmt = $this->pdo->prepare('SELECT status, attempts FROM email_queue WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return false;
+        }
+
+        $this->insertEvent(
+            $id,
+            'bounced',
+            (string) $row['status'],
+            (int) $row['attempts'],
+            $dsnStatus === null ? 'bounce' : 'dsn:' . $dsnStatus,
+            mb_substr($detail, 0, 2000),
+            null,
+            null
+        );
+
+        return true;
+    }
+
+    public function requeueUnknown(string $id): bool
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'UPDATE email_queue
+                 SET status = "pending", next_attempt_at = NULL, updated_at = :updated_at,
+                     lease_id = NULL, lease_expires_at = NULL
+                 WHERE id = :id AND status = "unknown"'
+            );
+            $stmt->execute(['id' => $id, 'updated_at' => self::now()]);
+            $requeued = $stmt->rowCount() === 1;
+            if ($requeued) {
+                $attempt = (int) $this->pdo->query(
+                    'SELECT attempts FROM email_queue WHERE id = ' . $this->pdo->quote($id)
+                )->fetchColumn();
+                $this->insertEvent($id, 'unknown_requeued', 'pending', $attempt, null, null, null, null);
+            }
+            $this->pdo->commit();
+
+            return $requeued;
         } catch (\Throwable $exception) {
             $this->pdo->rollBack();
             throw $exception;
@@ -1193,6 +1341,7 @@ final class EmailQueueRepository
             'retry' => 0,
             'sent' => 0,
             'failed' => 0,
+            'unknown' => 0,
         ];
     }
 

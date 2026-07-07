@@ -490,6 +490,12 @@ HTML;
                                 'default' => 'normal',
                                 'description' => '`high` ma pierwszenstwo przed `normal`. `technical` trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
                             ],
+                            'category' => [
+                                'type' => 'string',
+                                'enum' => ['transactional', 'marketing'],
+                                'default' => 'transactional',
+                                'description' => 'Kategoria wiadomosci. `marketing` dodaje naglowki List-Unsubscribe i podlega supresjom wypisow. Priorytet `technical` zawsze wymusza `transactional`.',
+                            ],
                             'metadata' => [
                                 'type' => 'object',
                                 'nullable' => true,
@@ -553,6 +559,12 @@ HTML;
                                 'enum' => ['normal', 'high', 'technical'],
                                 'default' => 'normal',
                                 'description' => '`high` ma pierwszenstwo przed `normal`. `technical` trafia do osobnej kolejki FIFO i jest wysylane przez Gmail SMTP.',
+                            ],
+                            'category' => [
+                                'type' => 'string',
+                                'enum' => ['transactional', 'marketing'],
+                                'default' => 'marketing',
+                                'description' => 'Kategoria wiadomosci. Batch domyslnie jest `marketing` (naglowki List-Unsubscribe, supresje wypisow); ustaw `transactional` dla masowych maili systemowych, np. faktur.',
                             ],
                             'metadata' => [
                                 'type' => 'object',

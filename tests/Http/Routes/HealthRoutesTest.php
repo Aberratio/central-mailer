@@ -45,6 +45,33 @@ final class HealthRoutesTest extends DatabaseTestCase
         self::assertSame('ok', $payload['checks']['workers']);
     }
 
+    public function testStrictHealthReturns503WithoutFreshWorkerHeartbeats(): void
+    {
+        $app = $this->app();
+        $request = (new ServerRequestFactory())->createServerRequest('GET', '/health')
+            ->withQueryParams(['strict' => '1']);
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(503, $response->getStatusCode());
+        self::assertSame('degraded', $payload['status']);
+    }
+
+    public function testStrictHealthReturns200WithFreshWorkerHeartbeats(): void
+    {
+        $heartbeats = new WorkerHeartbeatRepository($this->pdo);
+        $heartbeats->beat('standard:test', 'standard');
+        $heartbeats->beat('technical:test', 'technical');
+        $app = $this->app();
+        $request = (new ServerRequestFactory())->createServerRequest('GET', '/health')
+            ->withQueryParams(['strict' => '1']);
+
+        $response = $app->handle($request);
+
+        self::assertSame(200, $response->getStatusCode());
+    }
+
     private function app(): \Slim\App
     {
         $container = new Container();

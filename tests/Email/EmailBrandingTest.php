@@ -55,6 +55,53 @@ final class EmailBrandingTest extends TestCase
         self::assertNull($decorated->text);
     }
 
+    public function testDecoratesHtmlFragmentWithoutBodyTags(): void
+    {
+        $branding = new EmailBranding(new EmailBrandConfig(
+            brandName: 'Example',
+            footerHtml: '<div>Footer</div>'
+        ));
+
+        $decorated = $branding->apply($this->message('<p>Fragment only</p>', null));
+
+        self::assertStringContainsString('<p>Fragment only</p>', $decorated->html);
+        self::assertStringContainsString('Footer', $decorated->html);
+        self::assertStringContainsString('Example', $decorated->html);
+    }
+
+    public function testKeepsBodyAttributesWithMultilineTag(): void
+    {
+        $branding = new EmailBranding(new EmailBrandConfig(
+            brandName: 'Example',
+            footerHtml: '<div>Footer</div>'
+        ));
+        $html = "<html><body style=\"margin:0;\n padding:0\" data-theme='dark'><p>Body</p></body></html>";
+
+        $decorated = $branding->apply($this->message($html, null));
+
+        self::assertStringContainsString('<p>Body</p>', $decorated->html);
+        self::assertStringContainsString('Footer', $decorated->html);
+        self::assertStringContainsString("data-theme='dark'", $decorated->html);
+        self::assertSame(2, substr_count($decorated->html, '<body') + substr_count($decorated->html, '</body>'));
+    }
+
+    public function testPreservesCustomHeadersWhenDecorating(): void
+    {
+        $message = new EmailMessage(
+            'message-id',
+            'recipient@example.test',
+            'Subject',
+            '<p>Body</p>',
+            null,
+            [],
+            ['List-Unsubscribe' => '<https://example.test/unsubscribe?token=abc>']
+        );
+
+        $decorated = (new EmailBranding(new EmailBrandConfig(footerHtml: '<div>Footer</div>')))->apply($message);
+
+        self::assertSame($message->headers, $decorated->headers);
+    }
+
     private function message(string $html, ?string $text): EmailMessage
     {
         return new EmailMessage('message-id', 'recipient@example.test', 'Subject', $html, $text);

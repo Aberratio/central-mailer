@@ -35,4 +35,11 @@ final class RateLimiter
             $cleanupSince
         );
     }
+
+    public function acquireProvider(string $provider, int $limit, int $windowMinutes): RateLimitDecision
+    {
+        $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
+
+        return $this->repository->tryReserveScope('provider:' . $provider, $limit, $since, $windowMinutes);
+    }
 }

@@ -7,6 +7,7 @@ namespace CentralMailer\Http;
 use CentralMailer\Config\Env;
 use CentralMailer\Queue\IdempotencyConflictException;
 use CentralMailer\Queue\QueueCapacityExceededException;
+use CentralMailer\Suppression\RecipientSuppressedException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 use Slim\App;
@@ -28,6 +29,7 @@ final class ErrorMiddleware
                 $statusCode = match (true) {
                     $exception instanceof IdempotencyConflictException => 409,
                     $exception instanceof QueueCapacityExceededException => 429,
+                    $exception instanceof RecipientSuppressedException => 422,
                     $exception instanceof \InvalidArgumentException => 400,
                     default => 500,
                 };

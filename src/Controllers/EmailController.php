@@ -30,13 +30,19 @@ final class EmailController
     {
         $sourceApp = (string) $request->getAttribute('sourceApp');
         [$from, $to] = $this->dateRange($request);
+        [$limit, $offset] = $this->pagination($request);
+        $rows = $this->repository->findForSourceAppBetween($sourceApp, $from, $to, $limit + 1, $offset);
+        $hasMore = count($rows) > $limit;
 
         return $this->json([
             'from' => $from,
             'to' => $to,
+            'limit' => $limit,
+            'offset' => $offset,
+            'hasMore' => $hasMore,
             'emails' => array_map(
                 fn (array $row): array => $this->emailStatusPayload($row),
-                $this->repository->findForSourceAppBetween($sourceApp, $from, $to)
+                array_slice($rows, 0, $limit)
             ),
         ]);
     }
@@ -44,13 +50,29 @@ final class EmailController
     public function unsent(ServerRequestInterface $request): ResponseInterface
     {
         $sourceApp = (string) $request->getAttribute('sourceApp');
+        [$limit, $offset] = $this->pagination($request);
+        $rows = $this->repository->findUnsentForSourceApp($sourceApp, $limit + 1, $offset);
+        $hasMore = count($rows) > $limit;
 
         return $this->json([
+            'limit' => $limit,
+            'offset' => $offset,
+            'hasMore' => $hasMore,
             'emails' => array_map(
                 fn (array $row): array => $this->emailStatusPayload($row),
-                $this->repository->findUnsentForSourceApp($sourceApp)
+                array_slice($rows, 0, $limit)
             ),
         ]);
+    }
+
+    /** @return array{0: int, 1: int} */
+    private function pagination(ServerRequestInterface $request): array
+    {
+        $query = $request->getQueryParams();
+        $limit = min(1000, max(1, isset($query['limit']) ? (int) $query['limit'] : 500));
+        $offset = max(0, isset($query['offset']) ? (int) $query['offset'] : 0);
+
+        return [$limit, $offset];
     }
 
     public function diagnostics(ServerRequestInterface $request): ResponseInterface

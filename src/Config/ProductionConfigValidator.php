@@ -49,6 +49,9 @@ final class ProductionConfigValidator
         if (strlen($env->string('ADMIN_API_KEY', '')) < 32) {
             $errors[] = 'ADMIN_API_KEY must contain at least 32 characters';
         }
+        if (strlen($env->string('UNSUBSCRIBE_SECRET', '')) < 32) {
+            $errors[] = 'UNSUBSCRIBE_SECRET must contain at least 32 characters';
+        }
 
         self::validateSecureTransport($env, 'SMTP_SECURE', $errors);
         self::validateSecureTransport($env, 'GMAIL_SMTP_SECURE', $errors);
