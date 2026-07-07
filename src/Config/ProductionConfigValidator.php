@@ -49,8 +49,12 @@ final class ProductionConfigValidator
         if (strlen($env->string('ADMIN_API_KEY', '')) < 32) {
             $errors[] = 'ADMIN_API_KEY must contain at least 32 characters';
         }
-        if (strlen($env->string('UNSUBSCRIBE_SECRET', '')) < 32) {
-            $errors[] = 'UNSUBSCRIBE_SECRET must contain at least 32 characters';
+        // The unsubscribe secret is a bulk-sender compliance requirement; installations that
+        // send only transactional mail opt out with EMAIL_BATCH_DEFAULT_CATEGORY=transactional.
+        if ($env->string('EMAIL_BATCH_DEFAULT_CATEGORY', 'marketing') === 'marketing'
+            && strlen($env->string('UNSUBSCRIBE_SECRET', '')) < 32
+        ) {
+            $errors[] = 'UNSUBSCRIBE_SECRET must contain at least 32 characters (or set EMAIL_BATCH_DEFAULT_CATEGORY=transactional if you never send marketing mail)';
         }
 
         self::validateSecureTransport($env, 'SMTP_SECURE', $errors);
