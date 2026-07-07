@@ -93,6 +93,7 @@ final class AdminController
                 'heartbeatFreshSeconds' => $heartbeatFreshSeconds,
                 'standardActive' => $workerCounts['standard'] > 0,
                 'technicalActive' => $workerCounts['technical'] > 0,
+                'lastActivity' => $this->heartbeatRepository->lastActivityByQueue(),
                 'active' => array_map(static fn (array $row): array => [
                     'workerId' => $row['worker_id'],
                     'queue' => $row['queue'],

@@ -51,6 +51,9 @@ final class AdminRoutesTest extends DatabaseTestCase
         self::assertSame(1, $payload['statusCounts']['global']['pending']);
         self::assertTrue($payload['workers']['standardActive']);
         self::assertTrue($payload['workers']['technicalActive']);
+        self::assertNotNull($payload['workers']['lastActivity']['standard']['lastSeenAt']);
+        self::assertNotNull($payload['workers']['lastActivity']['technical']['lastSeenAt']);
+        self::assertNull($payload['workers']['lastActivity']['standard']['lastProcessedAt']);
         self::assertSame('Mailer standardowy', $payload['mailers'][0]['name']);
         self::assertSame(['normalne', 'wysoki priorytet'], $payload['mailers'][0]['messageTypes']);
     }
