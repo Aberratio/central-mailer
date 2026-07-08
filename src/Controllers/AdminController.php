@@ -115,14 +115,16 @@ final class AdminController
         $query = $request->getQueryParams();
         $limit = isset($query['limit']) ? (int) $query['limit'] : 100;
         $limit = min(500, max(1, $limit));
+        $contextId = self::contextIdQuery($query);
         $now = new \DateTimeImmutable();
 
         return $this->json([
             'generatedAt' => self::now(),
             'limit' => $limit,
+            'contextId' => $contextId,
             'emails' => array_map(
                 fn (array $row): array => $this->emailPayload($row, $now),
-                $this->repository->findUnsentGlobal($limit)
+                $this->repository->findUnsentGlobal($limit, $contextId)
             ),
         ]);
     }
@@ -132,16 +134,26 @@ final class AdminController
         $query = $request->getQueryParams();
         $limit = isset($query['limit']) ? (int) $query['limit'] : 100;
         $limit = min(500, max(1, $limit));
+        $contextId = self::contextIdQuery($query);
         $now = new \DateTimeImmutable();
 
         return $this->json([
             'generatedAt' => self::now(),
             'limit' => $limit,
+            'contextId' => $contextId,
             'emails' => array_map(
                 fn (array $row): array => $this->emailPayload($row, $now),
-                $this->repository->findSentGlobal($limit)
+                $this->repository->findSentGlobal($limit, $contextId)
             ),
         ]);
+    }
+
+    /** @param array<string, mixed> $query */
+    private static function contextIdQuery(array $query): ?string
+    {
+        $contextId = isset($query['contextId']) && is_string($query['contextId']) ? trim($query['contextId']) : '';
+
+        return $contextId === '' ? null : $contextId;
     }
 
     public function suppressions(ServerRequestInterface $request): ResponseInterface
@@ -355,6 +367,8 @@ final class AdminController
             'createdAt' => $row['created_at'],
             'updatedAt' => $row['updated_at'],
             'sentAt' => $row['sent_at'] ?? null,
+            'batchId' => $row['batch_id'] ?? null,
+            'contextId' => $row['context_id'] ?? null,
         ];
     }
 

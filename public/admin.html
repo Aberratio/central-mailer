@@ -718,6 +718,7 @@
               <option value="failed">nieudane</option>
               <option value="unknown">nieznany wynik</option>
             </select>
+            <input id="contextFilter" type="search" placeholder="Filtr zawodow (ID kontekstu)" aria-label="Filtr kontekstu">
             <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
           </div>
           <div id="emptyUnsent" class="empty hidden">Brak niewyslanych wiadomosci.</div>
@@ -730,6 +731,7 @@
                   <th>Priorytet</th>
                   <th>Odbiorca</th>
                   <th>Temat</th>
+                  <th>Pochodzenie</th>
                   <th>Wiek</th>
                   <th>Powod oczekiwania</th>
                   <th>Ostatni blad</th>
@@ -746,6 +748,7 @@
           </div>
           <div class="filters sent">
             <select id="sentSourceFilter" aria-label="Filtr klienta dla wyslanych"></select>
+            <input id="sentContextFilter" type="search" placeholder="Filtr zawodow (ID kontekstu)" aria-label="Filtr kontekstu dla wyslanych">
             <input id="sentSearchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie, ID albo ID dostawcy">
           </div>
           <div id="emptySent" class="empty hidden">Brak wyslanych wiadomosci.</div>
@@ -758,6 +761,7 @@
                   <th>Priorytet</th>
                   <th>Odbiorca</th>
                   <th>Temat</th>
+                  <th>Pochodzenie</th>
                   <th>Wyslano</th>
                   <th>ID dostawcy</th>
                 </tr>
@@ -843,8 +847,10 @@
       sentPanel: document.getElementById('sentPanel'),
       sourceFilter: document.getElementById('sourceFilter'),
       statusFilter: document.getElementById('statusFilter'),
+      contextFilter: document.getElementById('contextFilter'),
       searchFilter: document.getElementById('searchFilter'),
       sentSourceFilter: document.getElementById('sentSourceFilter'),
+      sentContextFilter: document.getElementById('sentContextFilter'),
       sentSearchFilter: document.getElementById('sentSearchFilter'),
       unsentRows: document.getElementById('unsentRows'),
       sentRows: document.getElementById('sentRows'),
@@ -888,6 +894,15 @@
     els.searchFilter.addEventListener('input', renderUnsent);
     els.sentSourceFilter.addEventListener('change', renderSent);
     els.sentSearchFilter.addEventListener('input', renderSent);
+    // Context filtering is server-side (the 100-row window would hide matches),
+    // so a changed value triggers a debounced full refresh.
+    let contextFilterTimer = null;
+    const scheduleContextRefresh = () => {
+      if (contextFilterTimer) clearTimeout(contextFilterTimer);
+      contextFilterTimer = setTimeout(refreshAll, 400);
+    };
+    els.contextFilter.addEventListener('input', scheduleContextRefresh);
+    els.sentContextFilter.addEventListener('input', scheduleContextRefresh);
     els.unsentTab.addEventListener('click', () => setMessageTab('unsent'));
     els.sentTab.addEventListener('click', () => setMessageTab('sent'));
 
@@ -926,10 +941,12 @@
       setBusy(true);
       clearError();
       try {
+        // Filter values are read at fetch time so the 15 s auto-refresh keeps them.
+        const contextParam = (value) => value.trim() ? `&contextId=${encodeURIComponent(value.trim())}` : '';
         const [status, unsent, sent, suppressions] = await Promise.all([
           apiGet('/admin/status'),
-          apiGet('/admin/unsent?limit=100'),
-          apiGet('/admin/sent?limit=100'),
+          apiGet(`/admin/unsent?limit=100${contextParam(els.contextFilter.value)}`),
+          apiGet(`/admin/sent?limit=100${contextParam(els.sentContextFilter.value)}`),
           apiGet('/admin/suppressions?limit=500')
         ]);
         renderStatus(status);
@@ -1160,6 +1177,7 @@
           <td data-label="Priorytet">${priorityLabel(email.priority)}</td>
           <td data-label="Odbiorca">${escapeHtml(email.to || '-')}</td>
           <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
+          <td data-label="Pochodzenie">${originCell(email)}</td>
           <td data-label="Wiek">${formatDuration(email.queueAgeSeconds)}</td>
           <td data-label="Powod oczekiwania">${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
           <td data-label="Ostatni blad">${escapeHtml(email.lastError || '-')}${email.status === 'unknown' ? `<div><button type="button" class="requeue-btn" data-email-id="${escapeHtml(email.id)}">Ponow wysylke</button></div>` : ''}</td>
@@ -1217,6 +1235,7 @@
           <td data-label="Priorytet">${priorityLabel(email.priority)}</td>
           <td data-label="Odbiorca">${escapeHtml(email.to || '-')}</td>
           <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
+          <td data-label="Pochodzenie">${originCell(email)}</td>
           <td data-label="Wyslano">${escapeHtml(email.sentAt || '-')}</td>
           <td data-label="ID dostawcy" class="mono">${escapeHtml(email.providerMessageId || '-')}</td>
         </tr>
@@ -1302,6 +1321,14 @@
     function statusPill(status) {
       const cls = status === 'failed' || status === 'unknown' ? 'bad' : status === 'retry' ? 'warn' : status === 'processing' ? 'info' : 'ok';
       return `<span class="pill ${cls}">${statusLabel(status)}</span>`;
+    }
+
+    function originCell(email) {
+      const pill = email.batchId
+        ? `<span class="pill info" title="Batch: ${escapeHtml(email.batchId)}">masowa</span>`
+        : '<span class="pill ok">pojedyncza</span>';
+      const context = email.contextId ? `<div class="muted-line mono" title="ID kontekstu">${escapeHtml(email.contextId)}</div>` : '';
+      return pill + context;
     }
 
     function statusLabel(status) {

@@ -105,6 +105,45 @@ final class AdminRoutesTest extends DatabaseTestCase
         self::assertSame('provider-newer', $payload['emails'][0]['providerMessageId']);
     }
 
+    public function testAdminUnsentFiltersByContextIdAndExposesOriginFields(): void
+    {
+        $this->insertQueueRow(['id' => 'admin-ctx-match', 'context_id' => 'evt-1', 'batch_id' => 'batch-9', 'status' => 'pending']);
+        $this->insertQueueRow(['id' => 'admin-ctx-other', 'context_id' => 'evt-2', 'status' => 'pending']);
+        $this->insertQueueRow(['id' => 'admin-ctx-none', 'status' => 'pending']);
+        $app = $this->app();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/unsent?limit=10&contextId=evt-1')
+            ->withQueryParams(['limit' => '10', 'contextId' => 'evt-1'])
+            ->withHeader('X-Admin-Key', 'admin-secret');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('evt-1', $payload['contextId']);
+        self::assertSame(['admin-ctx-match'], array_column($payload['emails'], 'id'));
+        self::assertSame('batch-9', $payload['emails'][0]['batchId']);
+        self::assertSame('evt-1', $payload['emails'][0]['contextId']);
+    }
+
+    public function testAdminSentFiltersByContextId(): void
+    {
+        $this->insertQueueRow(['id' => 'admin-sent-ctx', 'context_id' => 'evt-1', 'status' => 'sent', 'sent_at' => '2026-01-01 10:05:00']);
+        $this->insertQueueRow(['id' => 'admin-sent-other', 'status' => 'sent', 'sent_at' => '2026-01-01 10:06:00']);
+        $app = $this->app();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/sent?limit=10&contextId=evt-1')
+            ->withQueryParams(['limit' => '10', 'contextId' => 'evt-1'])
+            ->withHeader('X-Admin-Key', 'admin-secret');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(['admin-sent-ctx'], array_column($payload['emails'], 'id'));
+        self::assertNull($payload['emails'][0]['batchId']);
+    }
+
     public function testClientEndpointsStillRequireClientApiKey(): void
     {
         $app = $this->app();

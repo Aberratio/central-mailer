@@ -32,9 +32,9 @@ final class EmailQueueRepository
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
-            (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, category, metadata, status, attempts, max_attempts, created_at, updated_at)
+            (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, category, context_id, metadata, status, attempts, max_attempts, created_at, updated_at)
             VALUES
-            (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
+            (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :context_id, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
         );
 
         $this->pdo->beginTransaction();
@@ -58,6 +58,7 @@ final class EmailQueueRepository
                 'text_body' => $data['text'],
                 'priority' => $data['priority'],
                 'category' => $data['category'] ?? 'transactional',
+                'context_id' => $data['contextId'] ?? null,
                 'metadata' => $metadata,
                 'max_attempts' => $data['maxAttempts'] ?? 5,
                 'created_at' => $now,
@@ -119,9 +120,9 @@ final class EmailQueueRepository
             );
             $messageStmt = $this->pdo->prepare(
                 'INSERT INTO email_messages
-                 (id, source_app, subject, html_body, text_body, metadata, created_at)
+                 (id, source_app, subject, html_body, text_body, metadata, context_id, created_at)
                  VALUES
-                 (:id, :source_app, :subject, :html_body, :text_body, :metadata, :created_at)'
+                 (:id, :source_app, :subject, :html_body, :text_body, :metadata, :context_id, :created_at)'
             );
             $messageStmt->execute([
                 'id' => $messageId,
@@ -130,6 +131,7 @@ final class EmailQueueRepository
                 'html_body' => $data['html'],
                 'text_body' => $data['text'],
                 'metadata' => $messageMetadata,
+                'context_id' => $data['contextId'] ?? null,
                 'created_at' => $now,
             ]);
 
@@ -151,10 +153,10 @@ final class EmailQueueRepository
             $queueStmt = $this->pdo->prepare(
                 'INSERT INTO email_queue
                  (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body,
-                  text_body, priority, category, metadata, status, attempts, max_attempts, last_error, created_at, updated_at)
+                  text_body, priority, category, context_id, metadata, status, attempts, max_attempts, last_error, created_at, updated_at)
                  VALUES
                  (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body,
-                  :text_body, :priority, :category, :metadata, :status, 0, :max_attempts, :last_error, :created_at, :updated_at)'
+                  :text_body, :priority, :category, :context_id, :metadata, :status, 0, :max_attempts, :last_error, :created_at, :updated_at)'
             );
             $suppressedRecipients = $data['suppressedRecipients'] ?? [];
             $emails = [];
@@ -178,6 +180,7 @@ final class EmailQueueRepository
                     'text_body' => $recipient['text'] ?? null,
                     'priority' => $data['priority'],
                     'category' => $data['category'] ?? 'transactional',
+                    'context_id' => $data['contextId'] ?? null,
                     'metadata' => $recipientMetadata,
                     'status' => $status,
                     'max_attempts' => $data['maxAttempts'] ?? 5,
@@ -307,6 +310,57 @@ final class EmailQueueRepository
         $stmt->execute();
 
         return $stmt->fetchAll();
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function findForContextForSourceApp(string $contextId, string $sourceApp, int $limit = 500, int $offset = 0): array
+    {
+        $stmt = $this->pdo->prepare(
+            self::statusSelectSql() . '
+             FROM email_queue q
+             LEFT JOIN email_messages m ON m.id = q.message_id
+             WHERE q.context_id = :context_id AND q.source_app = :source_app
+             ORDER BY q.created_at DESC, q.id DESC
+             LIMIT :limit OFFSET :offset'
+        );
+        $stmt->bindValue('context_id', $contextId);
+        $stmt->bindValue('source_app', $sourceApp);
+        $stmt->bindValue('limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->bindValue('offset', max(0, $offset), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Counts are keyed by queue status; `bounced` overlays them (a bounced email is
+     * still counted under its queue status, which stays `sent`).
+     *
+     * @return array{statusCounts: array<string, int>, bounced: int, total: int}
+     */
+    public function contextStatusCountsForSourceApp(string $contextId, string $sourceApp): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT q.status, COUNT(*) AS cnt,
+                    SUM(CASE WHEN EXISTS (
+                        SELECT 1 FROM email_events e WHERE e.email_id = q.id AND e.event_type = "bounced"
+                    ) THEN 1 ELSE 0 END) AS bounced
+             FROM email_queue q
+             WHERE q.context_id = :context_id AND q.source_app = :source_app
+             GROUP BY q.status'
+        );
+        $stmt->execute(['context_id' => $contextId, 'source_app' => $sourceApp]);
+
+        $statusCounts = self::emptyStatusCounts();
+        $bounced = 0;
+        $total = 0;
+        foreach ($stmt->fetchAll() as $row) {
+            $statusCounts[(string) $row['status']] = (int) $row['cnt'];
+            $bounced += (int) $row['bounced'];
+            $total += (int) $row['cnt'];
+        }
+
+        return ['statusCounts' => $statusCounts, 'bounced' => $bounced, 'total' => $total];
     }
 
     public function assertCanEnqueue(
@@ -1267,16 +1321,20 @@ final class EmailQueueRepository
     }
 
     /** @return list<array<string, mixed>> */
-    public function findUnsentGlobal(int $limit): array
+    public function findUnsentGlobal(int $limit, ?string $contextId = null): array
     {
+        $contextClause = $contextId === null ? '' : ' AND context_id = :context_id';
         $stmt = $this->pdo->prepare(
-            'SELECT id, source_app, recipient_email, subject, priority, status,
+            'SELECT id, source_app, recipient_email, subject, priority, status, batch_id, context_id,
                     next_attempt_at, lease_expires_at, last_error, created_at, updated_at
              FROM email_queue
-             WHERE status <> "sent"
+             WHERE status <> "sent"' . $contextClause . '
              ORDER BY created_at ASC, id ASC
              LIMIT :limit'
         );
+        if ($contextId !== null) {
+            $stmt->bindValue('context_id', $contextId);
+        }
         $stmt->bindValue('limit', max(1, min(500, $limit)), PDO::PARAM_INT);
         $stmt->execute();
 
@@ -1284,16 +1342,20 @@ final class EmailQueueRepository
     }
 
     /** @return list<array<string, mixed>> */
-    public function findSentGlobal(int $limit): array
+    public function findSentGlobal(int $limit, ?string $contextId = null): array
     {
+        $contextClause = $contextId === null ? '' : ' AND context_id = :context_id';
         $stmt = $this->pdo->prepare(
-            'SELECT id, source_app, recipient_email, subject, priority, status,
+            'SELECT id, source_app, recipient_email, subject, priority, status, batch_id, context_id,
                     provider_message_id, sent_at, created_at, updated_at
              FROM email_queue
-             WHERE status = "sent"
+             WHERE status = "sent"' . $contextClause . '
              ORDER BY sent_at DESC, updated_at DESC, id ASC
              LIMIT :limit'
         );
+        if ($contextId !== null) {
+            $stmt->bindValue('context_id', $contextId);
+        }
         $stmt->bindValue('limit', max(1, min(500, $limit)), PDO::PARAM_INT);
         $stmt->execute();
 
@@ -1548,7 +1610,7 @@ final class EmailQueueRepository
             $data['attachments'] ?? []
         );
 
-        return hash('sha256', json_encode([
+        $hashed = [
             'to' => $data['to'],
             'subject' => $data['subject'],
             'html' => $data['html'],
@@ -1557,13 +1619,19 @@ final class EmailQueueRepository
             'metadata' => $metadata,
             'attachments' => $attachments,
             'maxAttempts' => $data['maxAttempts'] ?? 5,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        ];
+        // Only hashed when present so replays of pre-contextId requests keep their original hash.
+        if (($data['contextId'] ?? null) !== null) {
+            $hashed['contextId'] = $data['contextId'];
+        }
+
+        return hash('sha256', json_encode($hashed, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 
     /** @param array<string, mixed> $data */
     private static function batchRequestHash(array $data, ?string $metadata): string
     {
-        return hash('sha256', json_encode([
+        $hashed = [
             'subject' => $data['subject'],
             'html' => $data['html'],
             'text' => $data['text'],
@@ -1582,7 +1650,13 @@ final class EmailQueueRepository
                 $data['recipients']
             ),
             'maxAttempts' => $data['maxAttempts'] ?? 5,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        ];
+        // Only hashed when present so replays of pre-contextId requests keep their original hash.
+        if (($data['contextId'] ?? null) !== null) {
+            $hashed['contextId'] = $data['contextId'];
+        }
+
+        return hash('sha256', json_encode($hashed, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 
     /** @param list<array<string, mixed>> $recipients */
@@ -1621,10 +1695,12 @@ final class EmailQueueRepository
     {
         return 'SELECT q.id, q.status, q.source_app, q.recipient_email, COALESCE(q.subject, m.subject) AS subject, q.priority,
                     q.attempts, q.next_attempt_at, q.lease_expires_at, q.last_error, q.provider_message_id,
-                    q.created_at, q.updated_at, q.sent_at, q.batch_id,
+                    q.created_at, q.updated_at, q.sent_at, q.batch_id, q.context_id, q.metadata,
                     (SELECT e.event_type FROM email_events e WHERE e.email_id = q.id ORDER BY e.id DESC LIMIT 1) AS last_event_type,
                     (SELECT e.created_at FROM email_events e WHERE e.email_id = q.id ORDER BY e.id DESC LIMIT 1) AS last_event_at,
-                    (SELECT COUNT(*) FROM email_events e WHERE e.email_id = q.id AND e.event_type = "attempt_started") AS send_attempts';
+                    (SELECT COUNT(*) FROM email_events e WHERE e.email_id = q.id AND e.event_type = "attempt_started") AS send_attempts,
+                    (SELECT COUNT(*) FROM email_events e WHERE e.email_id = q.id AND e.event_type = "bounced") AS bounce_count,
+                    (SELECT MAX(e.created_at) FROM email_events e WHERE e.email_id = q.id AND e.event_type = "bounced") AS bounced_at';
     }
 
 }

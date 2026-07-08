@@ -19,6 +19,7 @@ final class EmailRoutes
         $app->post('/emails/batch', [EmailController::class, 'batch']);
         $app->get('/emails/batch/{id}', [EmailController::class, 'showBatch']);
         $app->get('/emails/batch/{id}/events', [EmailController::class, 'batchEvents']);
+        $app->get('/emails/context/{contextId}', [EmailController::class, 'showContext']);
         $app->get('/emails/{id}', [EmailController::class, 'show']);
         $app->get('/emails/{id}/events', [EmailController::class, 'events']);
         $app->options('/{routes:.+}', fn ($request, $response) => $response);

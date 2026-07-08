@@ -34,6 +34,7 @@ final class EmailRequestValidator
         $text = $this->optionalString($payload['text'] ?? null, 'text');
         $priority = $this->priority($payload['priority'] ?? 'normal');
         $category = $this->category($payload['category'] ?? null, $priority, $defaultCategory);
+        $contextId = $this->contextId($payload['contextId'] ?? null);
         $metadata = $payload['metadata'] ?? null;
         $attachments = $this->attachments($payload['attachments'] ?? []);
 
@@ -63,6 +64,7 @@ final class EmailRequestValidator
             'text' => $text,
             'priority' => $priority,
             'category' => $category,
+            'contextId' => $contextId,
             'metadata' => $metadata,
             'attachments' => $attachments,
         ];
@@ -99,6 +101,7 @@ final class EmailRequestValidator
             'text' => $payload['text'] ?? null,
             'priority' => $payload['priority'] ?? 'normal',
             'category' => $payload['category'] ?? null,
+            'contextId' => $payload['contextId'] ?? null,
             'metadata' => $payload['metadata'] ?? null,
             'attachments' => $payload['attachments'] ?? [],
         ], $defaultBatchCategory);
@@ -153,6 +156,24 @@ final class EmailRequestValidator
         }
 
         return [...$common, 'attachments' => $commonAttachments, 'recipients' => $validatedRecipients];
+    }
+
+    private function contextId(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw new \InvalidArgumentException('contextId must be a string');
+        }
+
+        $contextId = trim($value);
+        if ($contextId === '' || strlen($contextId) > 64 || preg_match('/[\x00-\x1F\x7F]/', $contextId)) {
+            throw new \InvalidArgumentException('contextId must be 1-64 characters without control characters');
+        }
+
+        return $contextId;
     }
 
     private function priority(mixed $value): string
