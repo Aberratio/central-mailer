@@ -33,10 +33,17 @@ final class AdminController
     {
         $now = self::now();
         $heartbeatFreshSeconds = $this->heartbeatFreshSeconds();
+        $cronIntervalSeconds = $this->cronIntervalSeconds();
+        $staleCriticalSeconds = max($heartbeatFreshSeconds, $cronIntervalSeconds * 2);
         $heartbeatFreshSince = (new \DateTimeImmutable(sprintf('-%d seconds', $heartbeatFreshSeconds)))->format('Y-m-d H:i:s');
         $workerCounts = $this->heartbeatRepository->activeCountsSince($heartbeatFreshSince);
         $activeWorkers = $this->heartbeatRepository->findActiveSince($heartbeatFreshSince);
         $workersOk = $workerCounts['standard'] > 0 && $workerCounts['technical'] > 0;
+        $lastActivity = $this->workerActivityForecast(
+            $this->heartbeatRepository->lastActivityByQueue(),
+            new \DateTimeImmutable(),
+            $cronIntervalSeconds
+        );
         $databaseStatus = 'ok';
         $attachmentsStatus = 'writable';
 
@@ -91,9 +98,11 @@ final class AdminController
             'mailers' => $this->mailers(),
             'workers' => [
                 'heartbeatFreshSeconds' => $heartbeatFreshSeconds,
+                'cronIntervalSeconds' => $cronIntervalSeconds,
+                'staleCriticalSeconds' => $staleCriticalSeconds,
                 'standardActive' => $workerCounts['standard'] > 0,
                 'technicalActive' => $workerCounts['technical'] > 0,
-                'lastActivity' => $this->heartbeatRepository->lastActivityByQueue(),
+                'lastActivity' => $lastActivity,
                 'active' => array_map(static fn (array $row): array => [
                     'workerId' => $row['worker_id'],
                     'queue' => $row['queue'],
@@ -106,7 +115,7 @@ final class AdminController
                     'processedCount' => (int) $row['processed_count'],
                 ], $activeWorkers),
             ],
-            'issues' => $this->issues($statusCounts, $backlog, $rateLimit, $workerCounts),
+            'issues' => $this->issues($statusCounts, $backlog, $rateLimit, $lastActivity, $cronIntervalSeconds, $staleCriticalSeconds),
         ]);
     }
 
@@ -229,27 +238,37 @@ final class AdminController
         return $this->json(['id' => $id, 'status' => 'pending']);
     }
 
-    /** @param array<string, int> $statusCounts @param array<string, mixed> $backlog @param array<string, mixed> $rateLimit @param array{standard: int, technical: int} $workerCounts @return list<array<string, mixed>> */
-    private function issues(array $statusCounts, array $backlog, array $rateLimit, array $workerCounts): array
-    {
+    /** @param array<string, int> $statusCounts @param array<string, mixed> $backlog @param array<string, mixed> $rateLimit @param array<string, array<string, mixed>> $lastActivity @return list<array<string, mixed>> */
+    private function issues(
+        array $statusCounts,
+        array $backlog,
+        array $rateLimit,
+        array $lastActivity,
+        int $cronIntervalSeconds,
+        int $staleCriticalSeconds
+    ): array {
         $issues = [];
-        if ($workerCounts['standard'] === 0) {
-            $issues[] = [
-                'severity' => 'critical',
-                'label' => 'Krytyczny',
-                'type' => 'worker_missing',
-                'title' => 'Brak aktywnego workera standardowego',
-                'message' => 'Nie ma swiezego heartbeat dla kolejki standardowej. Wiadomosci normalne i wysokiego priorytetu moga nie wychodzic.',
-            ];
+        $standardIssue = $this->workerMissingIssue(
+            'standard',
+            $lastActivity,
+            $cronIntervalSeconds,
+            $staleCriticalSeconds,
+            'Brak aktywnego workera standardowego',
+            'Wiadomosci normalne i wysokiego priorytetu moga nie wychodzic.'
+        );
+        if ($standardIssue !== null) {
+            $issues[] = $standardIssue;
         }
-        if ($workerCounts['technical'] === 0) {
-            $issues[] = [
-                'severity' => 'critical',
-                'label' => 'Krytyczny',
-                'type' => 'worker_missing',
-                'title' => 'Brak aktywnego workera technicznego',
-                'message' => 'Nie ma swiezego heartbeat dla kolejki technicznej. Wiadomosci techniczne FIFO moga stac w kolejce.',
-            ];
+        $technicalIssue = $this->workerMissingIssue(
+            'technical',
+            $lastActivity,
+            $cronIntervalSeconds,
+            $staleCriticalSeconds,
+            'Brak aktywnego workera technicznego',
+            'Wiadomosci techniczne FIFO moga stac w kolejce.'
+        );
+        if ($technicalIssue !== null) {
+            $issues[] = $technicalIssue;
         }
         if (($backlog['staleProcessingCount'] ?? 0) > 0) {
             $issues[] = [
@@ -313,6 +332,64 @@ final class AdminController
         }
 
         return $issues;
+    }
+
+    /**
+     * @param array<string, array<string, mixed>> $lastActivity
+     * @return array<string, mixed>|null
+     */
+    private function workerMissingIssue(
+        string $queue,
+        array $lastActivity,
+        int $cronIntervalSeconds,
+        int $staleCriticalSeconds,
+        string $title,
+        string $impact
+    ): ?array {
+        $activity = $lastActivity[$queue] ?? [];
+        $seconds = $activity['secondsSinceLastSeen'] ?? null;
+        if ($seconds !== null && $seconds <= $staleCriticalSeconds) {
+            return null;
+        }
+
+        $status = $seconds === null
+            ? 'Nie ma zadnego zarejestrowanego heartbeat dla tej kolejki.'
+            : sprintf(
+                'Ostatni heartbeat byl %ds temu - to wiecej niz jeden przegapiony cykl crona (worker startuje z crona co ok. %ds).',
+                $seconds,
+                $cronIntervalSeconds
+            );
+
+        return [
+            'severity' => 'critical',
+            'label' => 'Krytyczny',
+            'type' => 'worker_missing',
+            'queue' => $queue,
+            'title' => $title,
+            'message' => sprintf('%s %s', $status, $impact),
+            'lastSeenAt' => $activity['lastSeenAt'] ?? null,
+            'nextExpectedAt' => $activity['nextExpectedAt'] ?? null,
+        ];
+    }
+
+    /**
+     * @param array{standard: array{lastSeenAt: string|null, lastProcessedAt: string|null}, technical: array{lastSeenAt: string|null, lastProcessedAt: string|null}} $lastActivity
+     * @return array<string, array<string, mixed>>
+     */
+    private function workerActivityForecast(array $lastActivity, \DateTimeImmutable $now, int $cronIntervalSeconds): array
+    {
+        $forecast = [];
+        foreach ($lastActivity as $queue => $activity) {
+            $lastSeenAt = $activity['lastSeenAt'] ?? null;
+            $forecast[$queue] = $activity + [
+                'secondsSinceLastSeen' => is_string($lastSeenAt) ? self::secondsSince($lastSeenAt, $now) : null,
+                'nextExpectedAt' => is_string($lastSeenAt)
+                    ? self::dateTime($lastSeenAt)?->modify(sprintf('+%d seconds', $cronIntervalSeconds))->format('Y-m-d H:i:s')
+                    : null,
+            ];
+        }
+
+        return $forecast;
     }
 
     /** @return list<array<string, mixed>> */
@@ -417,6 +494,11 @@ final class AdminController
             $this->env->int('EMAIL_WORKER_SLEEP_SECONDS', 10) * 3,
             $this->env->int('TECHNICAL_EMAIL_WORKER_SLEEP_SECONDS', 10) * 3
         );
+    }
+
+    private function cronIntervalSeconds(): int
+    {
+        return max(10, $this->env->int('EMAIL_WORKER_CRON_INTERVAL_SECONDS', 60));
     }
 
     private static function secondsSince(string $value, \DateTimeImmutable $now): ?int
