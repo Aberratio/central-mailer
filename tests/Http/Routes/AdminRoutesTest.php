@@ -58,6 +58,79 @@ final class AdminRoutesTest extends DatabaseTestCase
         self::assertSame(['normalne', 'wysoki priorytet'], $payload['mailers'][0]['messageTypes']);
     }
 
+    public function testAdminStatusOmitsWorkerMissingIssueWithinCronGracePeriod(): void
+    {
+        $heartbeats = new WorkerHeartbeatRepository($this->pdo);
+        $heartbeats->beat('standard:test', 'standard');
+        $heartbeats->beat('technical:test', 'technical');
+        $this->backdateHeartbeat('standard', 90);
+        $app = $this->app();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/status')
+            ->withHeader('X-Admin-Key', 'admin-secret');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertFalse($payload['workers']['standardActive']);
+        $workerIssues = array_values(array_filter(
+            $payload['issues'],
+            static fn (array $issue): bool => $issue['type'] === 'worker_missing'
+        ));
+        self::assertSame([], $workerIssues);
+    }
+
+    public function testAdminStatusFlagsWorkerMissingIssueAfterCronGracePeriod(): void
+    {
+        $heartbeats = new WorkerHeartbeatRepository($this->pdo);
+        $heartbeats->beat('standard:test', 'standard');
+        $heartbeats->beat('technical:test', 'technical');
+        $this->backdateHeartbeat('standard', 200);
+        $app = $this->app();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/status')
+            ->withHeader('X-Admin-Key', 'admin-secret');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        $standardIssues = array_values(array_filter(
+            $payload['issues'],
+            static fn (array $issue): bool => $issue['type'] === 'worker_missing' && $issue['queue'] === 'standard'
+        ));
+        self::assertCount(1, $standardIssues);
+        self::assertSame('critical', $standardIssues[0]['severity']);
+        self::assertNotNull($standardIssues[0]['lastSeenAt']);
+        self::assertNotNull($standardIssues[0]['nextExpectedAt']);
+        $technicalIssues = array_values(array_filter(
+            $payload['issues'],
+            static fn (array $issue): bool => $issue['type'] === 'worker_missing' && $issue['queue'] === 'technical'
+        ));
+        self::assertSame([], $technicalIssues);
+    }
+
+    public function testAdminStatusFlagsWorkerMissingImmediatelyWhenNeverSeen(): void
+    {
+        $heartbeats = new WorkerHeartbeatRepository($this->pdo);
+        $heartbeats->beat('technical:test', 'technical');
+        $app = $this->app();
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/status')
+            ->withHeader('X-Admin-Key', 'admin-secret');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+
+        $standardIssues = array_values(array_filter(
+            $payload['issues'],
+            static fn (array $issue): bool => $issue['type'] === 'worker_missing' && $issue['queue'] === 'standard'
+        ));
+        self::assertCount(1, $standardIssues);
+        self::assertNull($standardIssues[0]['lastSeenAt']);
+        self::assertNull($standardIssues[0]['nextExpectedAt']);
+    }
+
     public function testAdminUnsentReturnsRowsFromAllClients(): void
     {
         $this->insertQueueRow(['id' => 'admin-app-a', 'source_app' => 'app-a', 'status' => 'pending']);
@@ -154,6 +227,13 @@ final class AdminRoutesTest extends DatabaseTestCase
         $response = $app->handle($request);
 
         self::assertSame(401, $response->getStatusCode());
+    }
+
+    private function backdateHeartbeat(string $queue, int $secondsAgo): void
+    {
+        $timestamp = (new \DateTimeImmutable(sprintf('-%d seconds', $secondsAgo)))->format('Y-m-d H:i:s');
+        $stmt = $this->pdo->prepare('UPDATE email_worker_heartbeats SET last_seen_at = :ts WHERE queue = :queue');
+        $stmt->execute(['ts' => $timestamp, 'queue' => $queue]);
     }
 
     private function app(): \Slim\App

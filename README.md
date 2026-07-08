@@ -573,6 +573,13 @@ On shared hosting, replace `/usr/bin/php` with the PHP CLI path provided by the 
 `/usr/local/php83/bin/php`. After a deploy, the next cron execution automatically uses the new application
 files, so the deploy workflow does not need to restart the worker.
 
+Set `EMAIL_WORKER_CRON_INTERVAL_SECONDS` to match the actual cron cadence (default `60`, matching the
+`* * * * *` schedule above). The admin dashboard uses it to show when each worker last ran and to
+compute the "next expected run" countdown, and to size the grace period before a missing heartbeat is
+flagged as a critical issue (a worker sitting between two cron ticks is normal, not an outage). If your
+host's cron only supports coarser granularity (e.g. every 5 minutes), set this to match — otherwise
+the dashboard will alert during every normal gap between runs.
+
 ### Graceful shutdown
 
 Workers stop cleanly (never mid-send, releasing unsent batch claims back to `pending`) on any of:

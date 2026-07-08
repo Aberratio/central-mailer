@@ -174,6 +174,39 @@
       gap: 16px;
     }
 
+    .main-nav {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-2);
+      margin-bottom: 4px;
+      overflow-x: auto;
+    }
+
+    .main-nav button {
+      flex: 1 1 0;
+      min-height: 40px;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .main-nav button.active {
+      background: var(--surface);
+      border-color: var(--border);
+      color: var(--text);
+      box-shadow: 0 4px 12px rgba(24, 35, 53, 0.06);
+    }
+
+    .tab-panel {
+      display: grid;
+      gap: 16px;
+    }
+
     .status-strip {
       display: grid;
       grid-template-columns: minmax(260px, 1.2fr) repeat(6, minmax(110px, 1fr));
@@ -323,78 +356,20 @@
       background: #1d4f91;
     }
 
-    details.collapse > summary {
-      list-style: none;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      user-select: none;
-    }
-
-    details.collapse > summary::-webkit-details-marker {
-      display: none;
-    }
-
-    details.collapse > summary h2 {
-      margin-bottom: 0;
-    }
-
-    details.collapse > summary::after {
-      content: '';
-      flex: 0 0 auto;
-      width: 9px;
-      height: 9px;
-      margin-right: 4px;
-      border-right: 2px solid var(--muted);
-      border-bottom: 2px solid var(--muted);
-      transform: rotate(45deg);
-      transition: transform 0.15s ease;
-    }
-
-    details.collapse[open] > summary::after {
-      transform: rotate(-135deg);
-    }
-
-    details.collapse[open] > summary {
-      margin-bottom: 12px;
-    }
-
     .filters {
-      display: grid;
-      grid-template-columns: minmax(160px, 220px) minmax(150px, 190px) minmax(0, 1fr);
+      display: flex;
+      flex-wrap: wrap;
       gap: 10px;
       margin-bottom: 12px;
     }
 
-    .filters.sent {
-      grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+    .filters > * {
+      flex: 1 1 160px;
+      min-width: 140px;
     }
 
-    .tabs {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 4px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface-2);
-    }
-
-    .tab {
-      min-height: 32px;
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-      font-weight: 700;
-    }
-
-    .tab.active {
-      background: var(--surface);
-      border-color: var(--border);
-      color: var(--text);
-      box-shadow: 0 4px 12px rgba(24, 35, 53, 0.06);
+    .filters > .search {
+      flex: 2 1 220px;
     }
 
     .table-wrap {
@@ -423,6 +398,20 @@
       font-size: 12px;
       text-transform: uppercase;
       background: #f8fafc;
+    }
+
+    th[data-sort] {
+      cursor: pointer;
+      user-select: none;
+    }
+
+    th[data-sort]:hover {
+      color: var(--text);
+    }
+
+    th[data-sort] .sort-arrow {
+      margin-left: 4px;
+      color: var(--info);
     }
 
     tr:last-child td {
@@ -498,6 +487,12 @@
       .toolbar button {
         flex: 1 1 130px;
       }
+      .main-nav {
+        flex-wrap: wrap;
+      }
+      .main-nav button {
+        flex: 1 1 45%;
+      }
       .status-strip {
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 8px;
@@ -505,12 +500,6 @@
       .metric {
         min-height: 58px;
         padding: 8px 10px;
-      }
-      .filters {
-        grid-template-columns: 1fr;
-      }
-      .filters.sent {
-        grid-template-columns: 1fr;
       }
       .metric .value {
         font-size: 20px;
@@ -573,6 +562,9 @@
     @media (max-width: 520px) {
       .app {
         padding: 10px;
+      }
+      .main-nav button {
+        flex: 1 1 100%;
       }
       .status-strip {
         grid-template-columns: 1fr 1fr;
@@ -638,76 +630,20 @@
 
       <div id="pageError" class="error hidden"></div>
 
-      <section class="status-strip">
-        <div class="panel health">
-          <div class="health-main">
-            <span id="healthPill" class="pill info">Ladowanie</span>
-            <h2 id="healthTitle">Status systemu</h2>
-            <p class="subtle" id="healthChecks">Pobieram dane z API.</p>
-            <p class="subtle" id="workerActivity"></p>
-          </div>
-          <div class="subtle mono" id="apiVersion"></div>
-        </div>
-        <div class="metric"><div class="label">Oczekuja</div><div class="value" id="countPending">0</div></div>
-        <div class="metric"><div class="label">Wysylane</div><div class="value" id="countProcessing">0</div></div>
-        <div class="metric"><div class="label">Ponowia probe</div><div class="value" id="countRetry">0</div></div>
-        <div class="metric"><div class="label">Wyslane</div><div class="value" id="countSent">0</div></div>
-        <div class="metric"><div class="label">Nieudane</div><div class="value" id="countFailed">0</div></div>
-        <div class="metric"><div class="label">Kwarantanna</div><div class="value" id="countUnknown">0</div></div>
-      </section>
+      <nav class="main-nav" role="tablist" aria-label="Sekcje panelu">
+        <button id="navQueue" class="active" type="button" role="tab" aria-controls="tabQueue" aria-selected="true">Kolejka</button>
+        <button id="navSent" type="button" role="tab" aria-controls="tabSent" aria-selected="false">Wyslane</button>
+        <button id="navStats" type="button" role="tab" aria-controls="tabStats" aria-selected="false">Statystyki</button>
+        <button id="navConfig" type="button" role="tab" aria-controls="tabConfig" aria-selected="false">Konfiguracja</button>
+      </nav>
 
-      <section class="grid-2">
+      <section id="tabQueue" class="tab-panel" role="tabpanel" aria-labelledby="navQueue">
         <div class="panel">
-          <h2>Problemy operacyjne</h2>
-          <div id="issues" class="issue-list"></div>
-        </div>
-        <div class="panel">
-          <h2>Globalny rate limit</h2>
-          <dl class="kv">
-            <dt>Uzyte</dt><dd id="rateUsed">0</dd>
-            <dt>Limit</dt><dd id="rateLimit">0</dd>
-            <dt>Pozostalo</dt><dd id="rateRemaining">0</dd>
-            <dt>Ponowna proba po</dt><dd id="rateRetry">-</dd>
-          </dl>
-          <div class="bar" style="margin-top: 12px;"><span id="rateBar"></span></div>
-        </div>
-      </section>
-
-      <section class="grid-3">
-        <div class="panel">
-          <h2>Backlog</h2>
-          <dl class="kv" id="backlog"></dl>
-        </div>
-        <div class="panel">
-          <h2>Uruchomione workery</h2>
-          <div id="workers" class="worker-list"></div>
-        </div>
-        <div class="panel">
-          <h2>Klienci</h2>
-          <div id="clients" class="client-list"></div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <details id="mailersDetails" class="collapse">
-          <summary><h2>Skonfigurowane mailery</h2></summary>
-          <div id="mailers" class="mailer-list"></div>
-        </details>
-      </section>
-
-      <section class="panel">
-        <div class="row-head" style="margin-bottom: 12px;">
-          <h2 style="margin-bottom: 0;">Wiadomosci</h2>
-          <div class="tabs" role="tablist" aria-label="Widok wiadomosci">
-            <button id="unsentTab" class="tab active" type="button" role="tab" aria-controls="unsentPanel" aria-selected="true">Niewyslane</button>
-            <button id="sentTab" class="tab" type="button" role="tab" aria-controls="sentPanel" aria-selected="false">Wyslane</button>
-          </div>
-        </div>
-        <div id="unsentPanel" role="tabpanel" aria-labelledby="unsentTab">
           <div class="row-head" style="margin-bottom: 12px;">
-            <span class="subtle">Kolejka aktywna i bledy wysylki</span>
+            <h2 style="margin-bottom: 0;">Kolejka</h2>
             <span class="subtle" id="unsentCount">0 rekordow</span>
           </div>
+          <p class="subtle" style="margin-bottom: 12px;">Aktywna kolejka i bledy wysylki.</p>
           <div class="filters">
             <select id="sourceFilter" aria-label="Filtr klienta"></select>
             <select id="statusFilter" aria-label="Filtr statusu">
@@ -718,22 +654,28 @@
               <option value="failed">nieudane</option>
               <option value="unknown">nieznany wynik</option>
             </select>
+            <select id="priorityFilter" aria-label="Filtr priorytetu">
+              <option value="">Wszystkie priorytety</option>
+              <option value="normal">normalny</option>
+              <option value="high">wysoki</option>
+              <option value="technical">techniczny</option>
+            </select>
             <input id="contextFilter" type="search" placeholder="Filtr zawodow (ID kontekstu)" aria-label="Filtr kontekstu">
-            <input id="searchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
+            <input id="searchFilter" class="search" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
           </div>
           <div id="emptyUnsent" class="empty hidden">Brak niewyslanych wiadomosci.</div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Klient</th>
-                  <th>Status</th>
-                  <th>Priorytet</th>
-                  <th>Odbiorca</th>
-                  <th>Temat</th>
+                  <th data-sort="sourceApp">Klient<span class="sort-arrow"></span></th>
+                  <th data-sort="status">Status<span class="sort-arrow"></span></th>
+                  <th data-sort="priority">Priorytet<span class="sort-arrow"></span></th>
+                  <th data-sort="to">Odbiorca<span class="sort-arrow"></span></th>
+                  <th data-sort="subject">Temat<span class="sort-arrow"></span></th>
                   <th>Pochodzenie</th>
-                  <th>Wiek</th>
-                  <th>Powod oczekiwania</th>
+                  <th data-sort="age">Wiek<span class="sort-arrow"></span></th>
+                  <th data-sort="delayReason">Powod oczekiwania<span class="sort-arrow"></span></th>
                   <th>Ostatni blad</th>
                 </tr>
               </thead>
@@ -741,29 +683,39 @@
             </table>
           </div>
         </div>
-        <div id="sentPanel" class="hidden" role="tabpanel" aria-labelledby="sentTab">
+      </section>
+
+      <section id="tabSent" class="tab-panel hidden" role="tabpanel" aria-labelledby="navSent">
+        <div class="panel">
           <div class="row-head" style="margin-bottom: 12px;">
-            <span class="subtle">Ostatnie wiadomosci przyjete przez SMTP</span>
+            <h2 style="margin-bottom: 0;">Wyslane</h2>
             <span class="subtle" id="sentCount">0 rekordow</span>
           </div>
-          <div class="filters sent">
+          <p class="subtle" style="margin-bottom: 12px;">Ostatnie wiadomosci przyjete przez SMTP.</p>
+          <div class="filters">
             <select id="sentSourceFilter" aria-label="Filtr klienta dla wyslanych"></select>
+            <select id="sentPriorityFilter" aria-label="Filtr priorytetu dla wyslanych">
+              <option value="">Wszystkie priorytety</option>
+              <option value="normal">normalny</option>
+              <option value="high">wysoki</option>
+              <option value="technical">techniczny</option>
+            </select>
             <input id="sentContextFilter" type="search" placeholder="Filtr zawodow (ID kontekstu)" aria-label="Filtr kontekstu dla wyslanych">
-            <input id="sentSearchFilter" type="search" placeholder="Szukaj po odbiorcy, temacie, ID albo ID dostawcy">
+            <input id="sentSearchFilter" class="search" type="search" placeholder="Szukaj po odbiorcy, temacie, ID albo ID dostawcy">
           </div>
           <div id="emptySent" class="empty hidden">Brak wyslanych wiadomosci.</div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Klient</th>
-                  <th>Status</th>
-                  <th>Priorytet</th>
-                  <th>Odbiorca</th>
-                  <th>Temat</th>
+                  <th data-sort="sourceApp">Klient<span class="sort-arrow"></span></th>
+                  <th data-sort="status">Status<span class="sort-arrow"></span></th>
+                  <th data-sort="priority">Priorytet<span class="sort-arrow"></span></th>
+                  <th data-sort="to">Odbiorca<span class="sort-arrow"></span></th>
+                  <th data-sort="subject">Temat<span class="sort-arrow"></span></th>
                   <th>Pochodzenie</th>
-                  <th>Wyslano</th>
-                  <th>ID dostawcy</th>
+                  <th data-sort="sentAt">Wyslano<span class="sort-arrow"></span></th>
+                  <th data-sort="providerMessageId">ID dostawcy<span class="sort-arrow"></span></th>
                 </tr>
               </thead>
               <tbody id="sentRows"></tbody>
@@ -772,36 +724,62 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="row-head" style="margin-bottom: 12px;">
-          <h2 style="margin-bottom: 0;">Lista supresji</h2>
-          <span class="subtle" id="suppressionCount">0 rekordow</span>
-        </div>
-        <div class="filters">
-          <input id="suppressionEmail" type="email" placeholder="adres@domena.pl" aria-label="Adres do zablokowania">
-          <select id="suppressionScope" aria-label="Zakres supresji">
-            <option value="all">wszystkie maile (globalnie)</option>
-            <option value="marketing">tylko marketing</option>
-          </select>
-          <input id="suppressionSourceApp" type="text" placeholder="klient (puste = wszyscy)" aria-label="Klient supresji">
-          <button id="suppressionAddBtn" type="button">Dodaj supresje</button>
-        </div>
-        <div id="emptySuppressions" class="empty hidden">Brak adresow na liscie supresji.</div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Adres</th>
-                <th>Powod</th>
-                <th>Zakres</th>
-                <th>Klient</th>
-                <th>Utworzono</th>
-                <th>Szczegoly</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="suppressionRows"></tbody>
-          </table>
+      <section id="tabStats" class="tab-panel hidden" role="tabpanel" aria-labelledby="navStats">
+        <section class="status-strip">
+          <div class="panel health">
+            <div class="health-main">
+              <span id="healthPill" class="pill info">Ladowanie</span>
+              <h2 id="healthTitle">Status systemu</h2>
+              <p class="subtle" id="healthChecks">Pobieram dane z API.</p>
+              <p class="subtle" id="workerActivity"></p>
+            </div>
+            <div class="subtle mono" id="apiVersion"></div>
+          </div>
+          <div class="metric"><div class="label">Oczekuja</div><div class="value" id="countPending">0</div></div>
+          <div class="metric"><div class="label">Wysylane</div><div class="value" id="countProcessing">0</div></div>
+          <div class="metric"><div class="label">Ponowia probe</div><div class="value" id="countRetry">0</div></div>
+          <div class="metric"><div class="label">Wyslane</div><div class="value" id="countSent">0</div></div>
+          <div class="metric"><div class="label">Nieudane</div><div class="value" id="countFailed">0</div></div>
+          <div class="metric"><div class="label">Kwarantanna</div><div class="value" id="countUnknown">0</div></div>
+        </section>
+
+        <section class="grid-2">
+          <div class="panel">
+            <h2>Problemy operacyjne</h2>
+            <div id="issues" class="issue-list"></div>
+          </div>
+          <div class="panel">
+            <h2>Globalny rate limit</h2>
+            <dl class="kv">
+              <dt>Uzyte</dt><dd id="rateUsed">0</dd>
+              <dt>Limit</dt><dd id="rateLimit">0</dd>
+              <dt>Pozostalo</dt><dd id="rateRemaining">0</dd>
+              <dt>Ponowna proba po</dt><dd id="rateRetry">-</dd>
+            </dl>
+            <div class="bar" style="margin-top: 12px;"><span id="rateBar"></span></div>
+          </div>
+        </section>
+
+        <section class="grid-3">
+          <div class="panel">
+            <h2>Backlog</h2>
+            <dl class="kv" id="backlog"></dl>
+          </div>
+          <div class="panel">
+            <h2>Uruchomione workery</h2>
+            <div id="workers" class="worker-list"></div>
+          </div>
+          <div class="panel">
+            <h2>Klienci</h2>
+            <div id="clients" class="client-list"></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="tabConfig" class="tab-panel hidden" role="tabpanel" aria-labelledby="navConfig">
+        <div class="panel">
+          <h2>Skonfigurowane mailery</h2>
+          <div id="mailers" class="mailer-list"></div>
         </div>
       </section>
     </section>
@@ -840,29 +818,27 @@
       workers: document.getElementById('workers'),
       clients: document.getElementById('clients'),
       mailers: document.getElementById('mailers'),
-      mailersDetails: document.getElementById('mailersDetails'),
-      unsentTab: document.getElementById('unsentTab'),
-      sentTab: document.getElementById('sentTab'),
-      unsentPanel: document.getElementById('unsentPanel'),
-      sentPanel: document.getElementById('sentPanel'),
+      navQueue: document.getElementById('navQueue'),
+      navSent: document.getElementById('navSent'),
+      navStats: document.getElementById('navStats'),
+      navConfig: document.getElementById('navConfig'),
+      tabQueue: document.getElementById('tabQueue'),
+      tabSent: document.getElementById('tabSent'),
+      tabStats: document.getElementById('tabStats'),
+      tabConfig: document.getElementById('tabConfig'),
       sourceFilter: document.getElementById('sourceFilter'),
       statusFilter: document.getElementById('statusFilter'),
+      priorityFilter: document.getElementById('priorityFilter'),
       contextFilter: document.getElementById('contextFilter'),
       searchFilter: document.getElementById('searchFilter'),
       sentSourceFilter: document.getElementById('sentSourceFilter'),
+      sentPriorityFilter: document.getElementById('sentPriorityFilter'),
       sentContextFilter: document.getElementById('sentContextFilter'),
       sentSearchFilter: document.getElementById('sentSearchFilter'),
       unsentRows: document.getElementById('unsentRows'),
       sentRows: document.getElementById('sentRows'),
       emptyUnsent: document.getElementById('emptyUnsent'),
       emptySent: document.getElementById('emptySent'),
-      suppressionRows: document.getElementById('suppressionRows'),
-      emptySuppressions: document.getElementById('emptySuppressions'),
-      suppressionCount: document.getElementById('suppressionCount'),
-      suppressionEmail: document.getElementById('suppressionEmail'),
-      suppressionScope: document.getElementById('suppressionScope'),
-      suppressionSourceApp: document.getElementById('suppressionSourceApp'),
-      suppressionAddBtn: document.getElementById('suppressionAddBtn'),
       unsentCount: document.getElementById('unsentCount'),
       sentCount: document.getElementById('sentCount')
     };
@@ -871,6 +847,8 @@
     let timer = null;
     let unsentEmails = [];
     let sentEmails = [];
+    const unsentSort = { key: null, dir: 'asc' };
+    const sentSort = { key: null, dir: 'asc' };
 
     if (adminKey) {
       els.adminKey.value = adminKey;
@@ -891,8 +869,10 @@
     els.logoutBtn.addEventListener('click', logout);
     els.sourceFilter.addEventListener('change', renderUnsent);
     els.statusFilter.addEventListener('change', renderUnsent);
+    els.priorityFilter.addEventListener('change', renderUnsent);
     els.searchFilter.addEventListener('input', renderUnsent);
     els.sentSourceFilter.addEventListener('change', renderSent);
+    els.sentPriorityFilter.addEventListener('change', renderSent);
     els.sentSearchFilter.addEventListener('input', renderSent);
     // Context filtering is server-side (the 100-row window would hide matches),
     // so a changed value triggers a debounced full refresh.
@@ -903,13 +883,15 @@
     };
     els.contextFilter.addEventListener('input', scheduleContextRefresh);
     els.sentContextFilter.addEventListener('input', scheduleContextRefresh);
-    els.unsentTab.addEventListener('click', () => setMessageTab('unsent'));
-    els.sentTab.addEventListener('click', () => setMessageTab('sent'));
 
-    els.mailersDetails.open = localStorage.getItem('centralMailerMailersOpen') === '1';
-    els.mailersDetails.addEventListener('toggle', () => {
-      localStorage.setItem('centralMailerMailersOpen', els.mailersDetails.open ? '1' : '0');
-    });
+    els.navQueue.addEventListener('click', () => setMainTab('queue'));
+    els.navSent.addEventListener('click', () => setMainTab('sent'));
+    els.navStats.addEventListener('click', () => setMainTab('stats'));
+    els.navConfig.addEventListener('click', () => setMainTab('config'));
+    setMainTab(localStorage.getItem('centralMailerActiveTab') || 'queue');
+
+    makeSortable(document.querySelector('#tabQueue thead'), unsentSort, renderUnsent);
+    makeSortable(document.querySelector('#tabSent thead'), sentSort, renderSent);
 
     function persistKey() {
       sessionStorage.setItem('centralMailerAdminKey', adminKey);
@@ -943,11 +925,10 @@
       try {
         // Filter values are read at fetch time so the 15 s auto-refresh keeps them.
         const contextParam = (value) => value.trim() ? `&contextId=${encodeURIComponent(value.trim())}` : '';
-        const [status, unsent, sent, suppressions] = await Promise.all([
+        const [status, unsent, sent] = await Promise.all([
           apiGet('/admin/status'),
           apiGet(`/admin/unsent?limit=100${contextParam(els.contextFilter.value)}`),
-          apiGet(`/admin/sent?limit=100${contextParam(els.sentContextFilter.value)}`),
-          apiGet('/admin/suppressions?limit=500')
+          apiGet(`/admin/sent?limit=100${contextParam(els.sentContextFilter.value)}`)
         ]);
         renderStatus(status);
         unsentEmails = unsent.emails || [];
@@ -955,7 +936,6 @@
         updateSourceFilter(status.statusCounts?.bySourceApp || []);
         renderUnsent();
         renderSent();
-        renderSuppressions(suppressions.suppressions || []);
         els.lastRefresh.textContent = `Ostatnie odswiezenie: ${new Date().toLocaleString()}`;
       } catch (error) {
         showError(error.message || 'Nie udalo sie pobrac danych.');
@@ -997,7 +977,7 @@
       els.countSent.textContent = counts.sent || 0;
       els.countFailed.textContent = counts.failed || 0;
       els.countUnknown.textContent = counts.unknown || 0;
-      renderIssues(data.issues || []);
+      renderIssues(data.issues || [], data.generatedAt);
       renderRateLimit(data.rateLimit?.global || {});
       renderBacklog(data.backlog || {}, data.failures || {});
       renderWorkers(data.workers || {}, data.generatedAt);
@@ -1005,7 +985,7 @@
       renderMailers(data.mailers || []);
     }
 
-    function renderIssues(issues) {
+    function renderIssues(issues, generatedAt) {
       if (!issues.length) {
         els.issues.innerHTML = '<div class="empty">Brak aktywnych problemow.</div>';
         return;
@@ -1013,7 +993,10 @@
       els.issues.innerHTML = issues.map(issue => {
         const cls = issue.severity === 'critical' ? 'bad' : issue.severity === 'warning' ? 'warn' : 'info';
         const extra = issue.count !== undefined ? ` (${issue.count})` : issue.retryAfter ? ` do ${escapeHtml(issue.retryAfter)}` : '';
-        return `<div class="row-item"><div class="row-head"><strong>${escapeHtml(issue.title || issue.message)}${extra}</strong><span class="pill ${cls}">${escapeHtml(issue.label || severityLabel(issue.severity))}</span></div><div class="muted-line">${escapeHtml(issue.message || '')}</div></div>`;
+        const workerInfo = issue.type === 'worker_missing'
+          ? `<div class="muted-line">Ostatni heartbeat: ${timestampWithAgo(issue.lastSeenAt, generatedAt) || 'brak danych'} | kolejne odpalenie: ${nextRunLabel(issue.nextExpectedAt, generatedAt) || '-'}</div>`
+          : '';
+        return `<div class="row-item"><div class="row-head"><strong>${escapeHtml(issue.title || issue.message)}${extra}</strong><span class="pill ${cls}">${escapeHtml(issue.label || severityLabel(issue.severity))}</span></div><div class="muted-line">${escapeHtml(issue.message || '')}</div>${workerInfo}</div>`;
       }).join('');
     }
 
@@ -1058,7 +1041,7 @@
             <span>Worker techniczny</span><span class="pill ${workers.technicalActive ? 'ok' : 'bad'}">${workers.technicalActive ? 'aktywny' : 'brak heartbeat'}</span>
           </div>
           <div class="muted-line">${workerActivityLine(lastActivity.technical, generatedAt)}</div>
-          <div class="muted-line">Worker jest uznany za aktywny, jesli wyslal heartbeat w ostatnich ${workers.heartbeatFreshSeconds || '-'} sekundach.</div>
+          <div class="muted-line">Worker jest uznany za aktywny, jesli wyslal heartbeat w ostatnich ${workers.heartbeatFreshSeconds || '-'} sekundach. Worker startuje z crona co ok. ${workers.cronIntervalSeconds || '-'}s; alert Krytyczny pojawia sie dopiero po ${workers.staleCriticalSeconds || '-'}s bez heartbeat.</div>
         </div>
       `;
       const rows = active.map(worker => `
@@ -1081,7 +1064,8 @@
     function workerActivityLine(activity, generatedAt) {
       const lastRun = timestampWithAgo(activity?.lastSeenAt, generatedAt);
       const lastSent = timestampWithAgo(activity?.lastProcessedAt, generatedAt);
-      return `Ostatni przebieg: ${lastRun || 'brak danych'} | ostatnia wysylka: ${lastSent || 'brak'}`;
+      const nextRun = nextRunLabel(activity?.nextExpectedAt, generatedAt);
+      return `Ostatni przebieg: ${lastRun || 'brak danych'} | ostatnia wysylka: ${lastSent || 'brak'} | kolejne odpalenie: ${nextRun || '-'}`;
     }
 
     function timestampWithAgo(value, reference) {
@@ -1102,6 +1086,15 @@
       if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
       const seconds = Math.max(0, Math.round((ref - ts) / 1000));
       return `${formatDuration(seconds)} temu`;
+    }
+
+    function nextRunLabel(value, reference) {
+      if (!value) return null;
+      const ts = Date.parse(String(value).replace(' ', 'T'));
+      const ref = reference ? Date.parse(String(reference).replace(' ', 'T')) : Date.now();
+      if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
+      const diffSeconds = Math.round((ts - ref) / 1000);
+      return diffSeconds >= 0 ? `za ${formatDuration(diffSeconds)}` : `spozniony o ${formatDuration(-diffSeconds)}`;
     }
 
     function renderClients(clients) {
@@ -1148,26 +1141,88 @@
       els.sentSourceFilter.value = [...els.sentSourceFilter.options].some(option => option.value === currentSent) ? currentSent : '';
     }
 
-    function setMessageTab(tab) {
-      const showSent = tab === 'sent';
-      els.unsentTab.classList.toggle('active', !showSent);
-      els.sentTab.classList.toggle('active', showSent);
-      els.unsentTab.setAttribute('aria-selected', showSent ? 'false' : 'true');
-      els.sentTab.setAttribute('aria-selected', showSent ? 'true' : 'false');
-      els.unsentPanel.classList.toggle('hidden', showSent);
-      els.sentPanel.classList.toggle('hidden', !showSent);
+    function setMainTab(tab) {
+      const tabs = { queue: els.tabQueue, sent: els.tabSent, stats: els.tabStats, config: els.tabConfig };
+      const navs = { queue: els.navQueue, sent: els.navSent, stats: els.navStats, config: els.navConfig };
+      if (!tabs[tab]) tab = 'queue';
+      Object.keys(tabs).forEach(key => {
+        tabs[key].classList.toggle('hidden', key !== tab);
+        navs[key].classList.toggle('active', key === tab);
+        navs[key].setAttribute('aria-selected', key === tab ? 'true' : 'false');
+      });
+      localStorage.setItem('centralMailerActiveTab', tab);
     }
+
+    function makeSortable(theadEl, state, onChange) {
+      if (!theadEl) return;
+      theadEl.querySelectorAll('th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sort;
+          state.dir = state.key === key && state.dir === 'asc' ? 'desc' : 'asc';
+          state.key = key;
+          updateSortIndicators(theadEl, state);
+          onChange();
+        });
+      });
+    }
+
+    function updateSortIndicators(theadEl, state) {
+      theadEl.querySelectorAll('th[data-sort]').forEach(th => {
+        const arrow = th.querySelector('.sort-arrow');
+        if (!arrow) return;
+        arrow.textContent = th.dataset.sort === state.key ? (state.dir === 'asc' ? '▲' : '▼') : '';
+      });
+    }
+
+    function priorityRank(priority) {
+      return { technical: 0, high: 1, normal: 2 }[priority] ?? 3;
+    }
+
+    function compareValues(a, b) {
+      if (typeof a === 'number' && typeof b === 'number') return a - b;
+      return String(a ?? '').localeCompare(String(b ?? ''), 'pl', { sensitivity: 'base' });
+    }
+
+    function applySort(rows, state, keyMap) {
+      if (!state.key || !keyMap[state.key]) return rows;
+      const getter = keyMap[state.key];
+      const sorted = [...rows].sort((a, b) => compareValues(getter(a), getter(b)));
+      return state.dir === 'asc' ? sorted : sorted.reverse();
+    }
+
+    const unsentSortKeys = {
+      sourceApp: email => email.sourceApp || '',
+      status: email => email.status || '',
+      priority: email => priorityRank(email.priority),
+      to: email => email.to || '',
+      subject: email => email.subject || '',
+      age: email => Number(email.queueAgeSeconds ?? 0),
+      delayReason: email => email.delayReason || ''
+    };
+
+    const sentSortKeys = {
+      sourceApp: email => email.sourceApp || '',
+      status: email => email.status || '',
+      priority: email => priorityRank(email.priority),
+      to: email => email.to || '',
+      subject: email => email.subject || '',
+      sentAt: email => email.sentAt || '',
+      providerMessageId: email => email.providerMessageId || ''
+    };
 
     function renderUnsent() {
       const source = els.sourceFilter.value;
       const status = els.statusFilter.value;
+      const priority = els.priorityFilter.value;
       const search = els.searchFilter.value.trim().toLowerCase();
-      const rows = unsentEmails.filter(email => {
+      const filtered = unsentEmails.filter(email => {
         if (source && email.sourceApp !== source) return false;
         if (status && email.status !== status) return false;
+        if (priority && email.priority !== priority) return false;
         if (!search) return true;
         return [email.id, email.to, email.subject].some(value => String(value || '').toLowerCase().includes(search));
       });
+      const rows = applySort(filtered, unsentSort, unsentSortKeys);
       els.unsentCount.textContent = `${rows.length} rekordow`;
       els.emptyUnsent.classList.toggle('hidden', rows.length !== 0);
       els.unsentRows.innerHTML = rows.map(email => `
@@ -1220,12 +1275,15 @@
 
     function renderSent() {
       const source = els.sentSourceFilter.value;
+      const priority = els.sentPriorityFilter.value;
       const search = els.sentSearchFilter.value.trim().toLowerCase();
-      const rows = sentEmails.filter(email => {
+      const filtered = sentEmails.filter(email => {
         if (source && email.sourceApp !== source) return false;
+        if (priority && email.priority !== priority) return false;
         if (!search) return true;
         return [email.id, email.to, email.subject, email.providerMessageId].some(value => String(value || '').toLowerCase().includes(search));
       });
+      const rows = applySort(filtered, sentSort, sentSortKeys);
       els.sentCount.textContent = `${rows.length} rekordow`;
       els.emptySent.classList.toggle('hidden', rows.length !== 0);
       els.sentRows.innerHTML = rows.map(email => `
@@ -1240,82 +1298,6 @@
           <td data-label="ID dostawcy" class="mono">${escapeHtml(email.providerMessageId || '-')}</td>
         </tr>
       `).join('');
-    }
-
-    function renderSuppressions(suppressions) {
-      els.suppressionCount.textContent = `${suppressions.length} rekordow`;
-      els.emptySuppressions.classList.toggle('hidden', suppressions.length !== 0);
-      els.suppressionRows.innerHTML = suppressions.map(entry => `
-        <tr>
-          <td data-label="Adres">${escapeHtml(entry.email)}</td>
-          <td data-label="Powod">${suppressionReasonLabel(entry.reason)}</td>
-          <td data-label="Zakres">${entry.appliesTo === 'marketing' ? 'tylko marketing' : 'wszystkie maile'}</td>
-          <td data-label="Klient">${escapeHtml(entry.sourceApp || 'wszyscy')}</td>
-          <td data-label="Utworzono">${escapeHtml(entry.createdAt || '-')}</td>
-          <td data-label="Szczegoly">${escapeHtml(entry.details || '-')}</td>
-          <td><button type="button" class="requeue-btn suppression-remove-btn" data-suppression-id="${escapeHtml(entry.id)}">Usun</button></td>
-        </tr>
-      `).join('');
-    }
-
-    function suppressionReasonLabel(reason) {
-      return {
-        bounce: 'odbicie (bounce)',
-        complaint: 'skarga (spam)',
-        unsubscribe: 'wypis z listy',
-        manual: 'reczna blokada'
-      }[reason] || escapeHtml(reason || '-');
-    }
-
-    els.suppressionAddBtn?.addEventListener('click', async () => {
-      const email = els.suppressionEmail.value.trim();
-      if (!email) {
-        showError('Podaj adres email do zablokowania.');
-        return;
-      }
-      els.suppressionAddBtn.disabled = true;
-      try {
-        await apiPost('/admin/suppressions', {
-          email,
-          reason: 'manual',
-          appliesTo: els.suppressionScope.value,
-          sourceApp: els.suppressionSourceApp.value.trim()
-        });
-        els.suppressionEmail.value = '';
-        els.suppressionSourceApp.value = '';
-        await refreshAll();
-      } catch (error) {
-        showError(error.message || 'Nie udalo sie dodac supresji.');
-      } finally {
-        els.suppressionAddBtn.disabled = false;
-      }
-    });
-
-    els.suppressionRows?.addEventListener('click', async (event) => {
-      const button = event.target.closest('.suppression-remove-btn');
-      if (!button) return;
-      if (!confirm('Usunac adres z listy supresji? Wiadomosci do tego adresu znow beda wysylane.')) return;
-      button.disabled = true;
-      try {
-        await apiDelete(`/admin/suppressions/${encodeURIComponent(button.dataset.suppressionId)}`);
-        await refreshAll();
-      } catch (error) {
-        showError(error.message || 'Nie udalo sie usunac supresji.');
-        button.disabled = false;
-      }
-    });
-
-    async function apiDelete(path) {
-      const response = await fetch(path, {
-        method: 'DELETE',
-        headers: { 'X-Admin-Key': adminKey, 'Accept': 'application/json' }
-      });
-      const text = await response.text();
-      const payload = text ? JSON.parse(text) : {};
-      if (!response.ok) {
-        throw new Error(errorLabel(payload.message || payload.error, response.status));
-      }
-      return payload;
     }
 
     function statusPill(status) {
