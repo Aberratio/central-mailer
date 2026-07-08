@@ -258,6 +258,57 @@ final class EmailRequestValidatorTest extends TestCase
     }
 
     /** @return array<string, mixed> */
+    public function testAcceptsAndTrimsContextId(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateQueuePayload([...$this->payload('recipient@no-mail.invalid'), 'contextId' => '  evt-1  ']);
+
+        self::assertSame('evt-1', $result['contextId']);
+    }
+
+    public function testMissingOrEmptyContextIdBecomesNull(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        self::assertNull($validator->validateQueuePayload($this->payload('recipient@no-mail.invalid'))['contextId']);
+        self::assertNull($validator->validateQueuePayload([...$this->payload('recipient@no-mail.invalid'), 'contextId' => ''])['contextId']);
+    }
+
+    public function testRejectsTooLongContextId(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('contextId must be 1-64 characters');
+
+        $validator->validateQueuePayload([...$this->payload('recipient@no-mail.invalid'), 'contextId' => str_repeat('x', 65)]);
+    }
+
+    public function testRejectsNonStringContextId(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('contextId must be a string');
+
+        $validator->validateQueuePayload([...$this->payload('recipient@no-mail.invalid'), 'contextId' => 123]);
+    }
+
+    public function testBatchPayloadForwardsContextId(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Subject',
+            'html' => '<p>Body</p>',
+            'contextId' => 'evt-1',
+            'recipients' => [['to' => 'recipient@no-mail.invalid']],
+        ]);
+
+        self::assertSame('evt-1', $result['contextId']);
+    }
+
     private function payload(string $to): array
     {
         return [

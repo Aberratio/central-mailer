@@ -203,6 +203,34 @@ final class EmailController
     }
 
     /** @param array<string, string> $args */
+    public function showContext(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
+    {
+        $sourceApp = (string) $request->getAttribute('sourceApp');
+        $contextId = (string) $args['contextId'];
+        [$limit, $offset] = $this->pagination($request);
+
+        // A context is not a first-class entity: an unknown id is simply an empty result.
+        $counts = $this->repository->contextStatusCountsForSourceApp($contextId, $sourceApp);
+        $rows = $this->repository->findForContextForSourceApp($contextId, $sourceApp, $limit + 1, $offset);
+        $hasMore = count($rows) > $limit;
+
+        return $this->json([
+            'contextId' => $contextId,
+            'sourceApp' => $sourceApp,
+            'limit' => $limit,
+            'offset' => $offset,
+            'hasMore' => $hasMore,
+            'total' => $counts['total'],
+            // `bounced` overlays the queue statuses: bounced emails are still counted under `sent`.
+            'statusCounts' => [...$counts['statusCounts'], 'bounced' => $counts['bounced']],
+            'emails' => array_map(
+                fn (array $row): array => $this->emailStatusPayload($row),
+                array_slice($rows, 0, $limit)
+            ),
+        ]);
+    }
+
+    /** @param array<string, string> $args */
     public function events(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface
     {
         $sourceApp = (string) $request->getAttribute('sourceApp');
@@ -305,12 +333,16 @@ final class EmailController
     {
         $now = new \DateTimeImmutable();
         $delay = $this->delay($row, $now);
+        $bounced = ((int) ($row['bounce_count'] ?? 0)) > 0;
 
         return [
             'id' => $row['id'],
             'status' => $row['status'],
+            'effectiveStatus' => $this->effectiveStatus($row, $bounced),
             'providerAcceptanceStatus' => $row['status'] === 'sent' ? 'accepted' : null,
-            'deliveryStatus' => $row['status'] === 'sent' ? 'unknown' : null,
+            'deliveryStatus' => $row['status'] === 'sent' ? ($bounced ? 'bounced' : 'unknown') : null,
+            'bounced' => $bounced,
+            'bouncedAt' => $row['bounced_at'] ?? null,
             'sourceApp' => $row['source_app'],
             'to' => $row['recipient_email'],
             'subject' => $row['subject'],
@@ -334,7 +366,29 @@ final class EmailController
             'updatedAt' => $row['updated_at'],
             'sentAt' => $row['sent_at'],
             'batchId' => $row['batch_id'],
+            'contextId' => $row['context_id'] ?? null,
+            'metadata' => isset($row['metadata']) && is_string($row['metadata'])
+                ? json_decode($row['metadata'], true)
+                : null,
         ];
+    }
+
+    /**
+     * Queue status refined with asynchronous outcomes: a bounce (recorded only as an
+     * email_events row) overrides `sent`, a suppression shows up instead of a bare `failed`.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function effectiveStatus(array $row, bool $bounced): string
+    {
+        if ($bounced) {
+            return 'bounced';
+        }
+        if ($row['status'] === 'failed' && ($row['last_event_type'] ?? null) === 'suppressed') {
+            return 'suppressed';
+        }
+
+        return (string) $row['status'];
     }
 
     /** @param list<array<string, mixed>> $emails @return array<string, int> */

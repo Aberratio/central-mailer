@@ -331,6 +331,27 @@ HTML;
                         ],
                     ],
                 ],
+                '/emails/context/{contextId}' => [
+                    'get' => [
+                        'tags' => ['Emails'],
+                        'summary' => 'Listuje statusy e-maili dla kontekstu (np. zawodow)',
+                        'description' => 'Zwraca zagregowane liczniki statusow i stronicowana liste wiadomosci aplikacji zrodlowej oznaczonych danym `contextId`. Licznik `bounced` jest nakladka: wiadomosci odbite pozostaja policzone takze w `sent`. Nieznany kontekst zwraca pusty wynik z `total: 0`.',
+                        'operationId' => 'listEmailsForContext',
+                        'parameters' => [
+                            ['$ref' => '#/components/parameters/ContextId'],
+                            ['$ref' => '#/components/parameters/Limit'],
+                            ['$ref' => '#/components/parameters/Offset'],
+                        ],
+                        'responses' => [
+                            '200' => [
+                                'description' => 'Statusy wiadomosci kontekstu.',
+                                'content' => ['application/json' => ['schema' => ['$ref' => '#/components/schemas/EmailContextStatusResponse']]],
+                            ],
+                            '401' => ['$ref' => '#/components/responses/UnauthorizedError'],
+                            '500' => ['$ref' => '#/components/responses/InternalServerError'],
+                        ],
+                    ],
+                ],
                 '/emails/{id}' => [
                     'get' => [
                         'tags' => ['Emails'],
@@ -410,6 +431,28 @@ HTML;
                             'format' => 'uuid',
                         ],
                         'description' => 'Identyfikator batcha zwrocony przez POST /emails/batch.',
+                    ],
+                    'ContextId' => [
+                        'name' => 'contextId',
+                        'in' => 'path',
+                        'required' => true,
+                        'schema' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'description' => 'Identyfikator kontekstu nadany przez aplikacje zrodlowa, np. id zawodow.',
+                        'example' => 'evt-123',
+                    ],
+                    'Limit' => [
+                        'name' => 'limit',
+                        'in' => 'query',
+                        'required' => false,
+                        'schema' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 1000, 'default' => 500],
+                        'description' => 'Maksymalna liczba wiadomosci na stronie.',
+                    ],
+                    'Offset' => [
+                        'name' => 'offset',
+                        'in' => 'query',
+                        'required' => false,
+                        'schema' => ['type' => 'integer', 'minimum' => 0, 'default' => 0],
+                        'description' => 'Przesuniecie stronicowania.',
                     ],
                     'FromDateTime' => [
                         'name' => 'from',
@@ -496,6 +539,14 @@ HTML;
                                 'default' => 'transactional',
                                 'description' => 'Kategoria wiadomosci. `marketing` dodaje naglowki List-Unsubscribe i podlega supresjom wypisow. Priorytet `technical` zawsze wymusza `transactional`.',
                             ],
+                            'contextId' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'minLength' => 1,
+                                'maxLength' => 64,
+                                'description' => 'Opcjonalny identyfikator kontekstu (np. id zawodow) do pozniejszego grupowego odczytu statusow przez GET /emails/context/{contextId}.',
+                                'example' => 'evt-123',
+                            ],
                             'metadata' => [
                                 'type' => 'object',
                                 'nullable' => true,
@@ -565,6 +616,14 @@ HTML;
                                 'enum' => ['transactional', 'marketing'],
                                 'default' => 'marketing',
                                 'description' => 'Kategoria wiadomosci. Batch domyslnie jest `marketing` (naglowki List-Unsubscribe, supresje wypisow); ustaw `transactional` dla masowych maili systemowych, np. faktur.',
+                            ],
+                            'contextId' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'minLength' => 1,
+                                'maxLength' => 64,
+                                'description' => 'Opcjonalny identyfikator kontekstu (np. id zawodow) wspolny dla calej paczki.',
+                                'example' => 'evt-123',
                             ],
                             'metadata' => [
                                 'type' => 'object',
@@ -834,6 +893,53 @@ HTML;
                                 'format' => 'uuid',
                                 'nullable' => true,
                                 'description' => 'Identyfikator batcha albo null dla pojedynczej wiadomosci.',
+                            ],
+                            'contextId' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'description' => 'Identyfikator kontekstu przekazany przy kolejkowaniu albo null.',
+                            ],
+                            'effectiveStatus' => [
+                                'type' => 'string',
+                                'enum' => ['pending', 'processing', 'sent', 'retry', 'failed', 'unknown', 'bounced', 'suppressed'],
+                                'description' => 'Status kolejki wzbogacony o wyniki asynchroniczne: `bounced` gdy odnotowano odbicie (status kolejki pozostaje `sent`), `suppressed` gdy adres jest zablokowany.',
+                            ],
+                            'bounced' => [
+                                'type' => 'boolean',
+                                'description' => 'Czy dla wiadomosci odnotowano zdarzenie odbicia (bounce).',
+                            ],
+                            'bouncedAt' => [
+                                'type' => 'string',
+                                'format' => 'date-time',
+                                'nullable' => true,
+                                'description' => 'Czas ostatniego odnotowanego odbicia albo null.',
+                            ],
+                            'metadata' => [
+                                'type' => 'object',
+                                'nullable' => true,
+                                'additionalProperties' => true,
+                                'description' => 'Metadata przekazane przy kolejkowaniu albo null.',
+                            ],
+                        ],
+                    ],
+                    'EmailContextStatusResponse' => [
+                        'type' => 'object',
+                        'required' => ['contextId', 'sourceApp', 'limit', 'offset', 'hasMore', 'total', 'statusCounts', 'emails'],
+                        'properties' => [
+                            'contextId' => ['type' => 'string'],
+                            'sourceApp' => ['type' => 'string'],
+                            'limit' => ['type' => 'integer'],
+                            'offset' => ['type' => 'integer'],
+                            'hasMore' => ['type' => 'boolean'],
+                            'total' => ['type' => 'integer', 'description' => 'Laczna liczba wiadomosci w kontekscie (niezaleznie od stronicowania).'],
+                            'statusCounts' => [
+                                'type' => 'object',
+                                'additionalProperties' => ['type' => 'integer'],
+                                'description' => 'Liczniki per status kolejki dla calego kontekstu. Klucz `bounced` jest nakladka: wiadomosci odbite pozostaja policzone takze w `sent`.',
+                            ],
+                            'emails' => [
+                                'type' => 'array',
+                                'items' => ['$ref' => '#/components/schemas/EmailStatusResponse'],
                             ],
                         ],
                     ],
