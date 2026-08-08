@@ -78,4 +78,22 @@ final class EmailQueueRepositoryAdminAggregationsTest extends DatabaseTestCase
         self::assertCount(1, $unsent);
         self::assertSame('technical-blocker', $unsent[0]['id']);
     }
+
+    public function testOldestUnsentGlobalIgnoresTerminalStatuses(): void
+    {
+        $this->insertQueueRow([
+            'id' => 'failed-old',
+            'status' => 'failed',
+            'created_at' => '2026-01-01 07:00:00',
+        ]);
+        $pendingId = $this->insertQueueRow([
+            'id' => 'pending-newer',
+            'status' => 'pending',
+            'created_at' => '2026-01-01 08:00:00',
+        ]);
+
+        $oldest = $this->repository->oldestUnsentGlobal();
+
+        self::assertSame($pendingId, $oldest['id']);
+    }
 }

@@ -1232,7 +1232,7 @@ final class EmailQueueRepository
         $stmt = $this->pdo->query(
             'SELECT id, source_app, status, priority, created_at, next_attempt_at, lease_expires_at, last_error
              FROM email_queue
-             WHERE status <> "sent"
+             WHERE status IN ("pending", "processing", "retry")
              ORDER BY created_at ASC, id ASC
              LIMIT 1'
         );
