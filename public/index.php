@@ -95,7 +95,8 @@ $container->set(AdminController::class, fn ($c) => new AdminController(
     $c->get(RateLimitRepository::class),
     $c->get(WorkerHeartbeatRepository::class),
     $c->get(Env::class),
-    $c->get(SuppressionRepository::class)
+    $c->get(SuppressionRepository::class),
+    $c->get(EnqueueRateLimitRepository::class)
 ));
 $container->set(UnsubscribeController::class, function ($c) {
     $env = $c->get(Env::class);

@@ -8,6 +8,7 @@ use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
 use CentralMailer\Http\ApiVersion;
 use CentralMailer\Queue\EmailQueueRepository;
+use CentralMailer\Queue\EnqueueRateLimitRepository;
 use CentralMailer\Queue\RateLimitRepository;
 use CentralMailer\Queue\WorkerHeartbeatRepository;
 use CentralMailer\Suppression\SuppressionRepository;
@@ -25,7 +26,8 @@ final class AdminController
         private readonly RateLimitRepository $rateLimitRepository,
         private readonly WorkerHeartbeatRepository $heartbeatRepository,
         private readonly Env $env,
-        private readonly ?SuppressionRepository $suppressions = null
+        private readonly ?SuppressionRepository $suppressions = null,
+        private readonly ?EnqueueRateLimitRepository $enqueueRateLimitRepository = null
     ) {
     }
 
@@ -113,6 +115,7 @@ final class AdminController
                     'gmail' => $this->gmailProviderUsage(),
                 ],
                 'byClient' => $this->byClientUsage($globalWindowMinutes),
+                'intake' => $this->intakeUsage(),
             ],
             'throughput' => $throughput,
             'mailers' => $this->mailers(),
@@ -144,7 +147,9 @@ final class AdminController
                 $staleCriticalSeconds,
                 $recentFailedCount,
                 $failedLookbackMinutes,
-                $latencyAlertSeconds
+                $latencyAlertSeconds,
+                $databaseStatus,
+                $attachmentsStatus
             ),
         ]);
     }
@@ -191,6 +196,33 @@ final class AdminController
         }
 
         return $byClient;
+    }
+
+    /**
+     * Read-only view of EnqueueRateLimitMiddleware's per-client limit on how fast a client
+     * can submit new emails - distinct from rateLimit.byClient, which throttles sending.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function intakeUsage(): array
+    {
+        if ($this->enqueueRateLimitRepository === null) {
+            return [];
+        }
+
+        $limit = max(1, $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_COUNT', 60));
+        $windowMinutes = max(1, $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_WINDOW_MINUTES', 1));
+        $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
+
+        $intake = [];
+        foreach ($this->repository->statusCountsBySourceApp() as $client) {
+            $sourceApp = (string) $client['sourceApp'];
+            $usage = $this->enqueueRateLimitRepository->usage($sourceApp, $limit, $since, $windowMinutes);
+
+            $intake[] = ['sourceApp' => $sourceApp, 'windowMinutes' => $windowMinutes, ...$usage];
+        }
+
+        return $intake;
     }
 
     public function unsent(ServerRequestInterface $request): ResponseInterface
@@ -328,16 +360,40 @@ final class AdminController
         int $staleCriticalSeconds,
         int $recentFailedCount,
         int $failedLookbackMinutes,
-        int $latencyAlertSeconds
+        int $latencyAlertSeconds,
+        string $databaseStatus,
+        string $attachmentsStatus
     ): array {
         $issues = [];
+        if ($databaseStatus !== 'ok') {
+            $issues[] = [
+                'severity' => 'critical',
+                'label' => 'Krytyczny',
+                'type' => 'database_error',
+                'title' => 'Baza danych jest niedostępna',
+                'message' => 'Panel i workery nie mogą odczytać ani zapisać stanu kolejki, dopóki baza nie odpowiada.',
+                'blocking' => true,
+                'remedy' => 'Sprawdź, czy serwer bazy danych działa i czy dane dostępowe w konfiguracji są poprawne.',
+            ];
+        }
+        if ($attachmentsStatus !== 'writable') {
+            $issues[] = [
+                'severity' => 'critical',
+                'label' => 'Krytyczny',
+                'type' => 'attachments_error',
+                'title' => 'Katalog załączników nie jest zapisywalny',
+                'message' => 'Wiadomości z załącznikami nie mogą zostać przygotowane do wysyłki.',
+                'blocking' => true,
+                'remedy' => 'Sprawdź uprawnienia do katalogu załączników na serwerze.',
+            ];
+        }
         $standardIssue = $this->workerMissingIssue(
             'standard',
             $lastActivity,
             $cronIntervalSeconds,
             $staleCriticalSeconds,
             'Brak aktywnego workera standardowego',
-            'Wiadomosci normalne i wysokiego priorytetu moga nie wychodzic.'
+            'Wiadomości normalne i wysokiego priorytetu mogą nie wychodzić.'
         );
         if ($standardIssue !== null) {
             $issues[] = $standardIssue;
@@ -348,7 +404,7 @@ final class AdminController
             $cronIntervalSeconds,
             $staleCriticalSeconds,
             'Brak aktywnego workera technicznego',
-            'Wiadomosci techniczne FIFO moga stac w kolejce.'
+            'Wiadomości techniczne FIFO mogą stać w kolejce.'
         );
         if ($technicalIssue !== null) {
             $issues[] = $technicalIssue;
@@ -358,11 +414,11 @@ final class AdminController
                 'severity' => 'critical',
                 'label' => 'Krytyczny',
                 'type' => 'stale_processing',
-                'title' => 'Wiadomosci utknely w przetwarzaniu',
-                'message' => 'Czesc wiadomosci ma wygasnieta dzierzawe przetwarzania. Worker powinien je zwolnic przy kolejnym przebiegu.',
+                'title' => 'Wiadomości utknęły w przetwarzaniu',
+                'message' => 'Część wiadomości ma wygasłą dzierżawę przetwarzania. Worker powinien je zwolnić przy kolejnym przebiegu.',
                 'count' => $backlog['staleProcessingCount'],
                 'blocking' => false,
-                'remedy' => 'Nic nie rob - worker zwolni te wiadomosci automatycznie przy najblizszym przebiegu.',
+                'remedy' => 'Nic nie rób - worker zwolni te wiadomości automatycznie przy najbliższym przebiegu.',
             ];
         }
         if (($statusCounts['unknown'] ?? 0) > 0) {
@@ -370,11 +426,11 @@ final class AdminController
                 'severity' => 'critical',
                 'label' => 'Krytyczny',
                 'type' => 'unknown_emails',
-                'title' => 'Wiadomosci w kwarantannie (nieznany wynik wysylki)',
-                'message' => 'Proba wysylki mogla dotrzec do serwera SMTP, ale wynik jest nieznany. Sprawdz logi i skrzynke nadawcy, a potem uzyj przycisku ponownego kolejkowania.',
+                'title' => 'Wiadomości w kwarantannie (nieznany wynik wysyłki)',
+                'message' => 'Próba wysyłki mogła dotrzeć do serwera SMTP, ale wynik jest nieznany. Sprawdź logi i skrzynkę nadawcy, a potem użyj przycisku ponownego kolejkowania.',
                 'count' => $statusCounts['unknown'],
                 'blocking' => false,
-                'remedy' => 'Sprawdz logi i skrzynke nadawcy dla kazdej wiadomosci, a potem uzyj przycisku ponownego kolejkowania.',
+                'remedy' => 'Sprawdź logi i skrzynkę nadawcy dla każdej wiadomości, a potem użyj przycisku ponownego kolejkowania.',
             ];
         }
         // Gated on recent activity (same lookback as scripts/monitor-queue.php), not the
@@ -382,17 +438,17 @@ final class AdminController
         if ($recentFailedCount > 0) {
             $issues[] = [
                 'severity' => 'warning',
-                'label' => 'Ostrzezenie',
+                'label' => 'Ostrzeżenie',
                 'type' => 'failed_emails',
-                'title' => 'Sa niedawne trwale nieudane wysylki',
+                'title' => 'Są niedawne trwale nieudane wysyłki',
                 'message' => sprintf(
-                    '%d wiadomosc(i) trwale nie powiodly sie w ciagu ostatnich %d min. Te wiadomosci wyczerpaly limit prob i nie beda juz wysylane automatycznie.',
+                    '%d wiadomość(i) trwale nie powiodły się w ciągu ostatnich %d min. Te wiadomości wyczerpały limit prób i nie będą już wysyłane automatycznie.',
                     $recentFailedCount,
                     $failedLookbackMinutes
                 ),
                 'count' => $recentFailedCount,
                 'blocking' => false,
-                'remedy' => 'Sprawdz kody bledow w sekcji "Niepowodzenia" i popraw przyczyne (np. zly adres, odrzucenie SMTP).',
+                'remedy' => 'Sprawdź kody błędów w sekcji "Niepowodzenia" i popraw przyczynę (np. zły adres, odrzucenie SMTP).',
             ];
         }
         // Gated on how long the oldest unsent email has actually been waiting
@@ -405,32 +461,32 @@ final class AdminController
             $nextDelayedAt = $backlog['nextDelayedAt'] ?? null;
             $issues[] = [
                 'severity' => 'warning',
-                'label' => 'Ostrzezenie',
+                'label' => 'Ostrzeżenie',
                 'type' => 'retry_backlog',
-                'title' => 'Wiadomosci czekaja na ponowna probe dluzej niz zwykle',
+                'title' => 'Wiadomości czekają na ponowną próbę dłużej niż zwykle',
                 'message' => sprintf(
-                    'Najstarsza niewyslana wiadomosc czeka juz %ds - to wiecej niz prog %ds. Zwykle oznacza to blad SMTP, limit lub chwilowy problem dostawcy.',
+                    'Najstarsza niewysłana wiadomość czeka już %ds - to więcej niż próg %ds. Zwykle oznacza to błąd SMTP, limit lub chwilowy problem dostawcy.',
                     $oldestUnsentAgeSeconds,
                     $latencyAlertSeconds
                 ),
                 'count' => $statusCounts['retry'],
                 'blocking' => false,
                 'remedy' => $nextDelayedAt !== null
-                    ? sprintf('Nic nie rob - najblizsza automatyczna proba zaplanowana jest o %s.', $nextDelayedAt)
-                    : 'Sprawdz worker - wiadomosci czekaja dluzej niz zwykle mimo braku zaplanowanej kolejnej proby.',
+                    ? sprintf('Nic nie rób - najbliższa automatyczna próba zaplanowana jest o %s.', $nextDelayedAt)
+                    : 'Sprawdź worker - wiadomości czekają dłużej niż zwykle mimo braku zaplanowanej kolejnej próby.',
             ];
         }
         if (($rateLimit['remaining'] ?? null) === 0) {
             $issues[] = [
                 'severity' => 'warning',
-                'label' => 'Ostrzezenie',
+                'label' => 'Ostrzeżenie',
                 'type' => 'rate_limited',
-                'title' => 'Globalny limit wysylki jest wyczerpany',
-                'message' => 'Worker poczeka do zwolnienia okna limitu przed kolejnymi wysylkami.',
+                'title' => 'Globalny limit wysyłki jest wyczerpany',
+                'message' => 'Worker poczeka do zwolnienia okna limitu przed kolejnymi wysyłkami.',
                 'retryAfter' => $rateLimit['retryAfter'] ?? null,
                 'blocking' => true,
                 'remedy' => sprintf(
-                    'Nic nie rob - limit odnowi sie o %s.',
+                    'Nic nie rób - limit odnowi się o %s.',
                     $rateLimit['retryAfter'] ?? 'nieznanym czasie'
                 ),
             ];
@@ -458,9 +514,9 @@ final class AdminController
         }
 
         $status = $seconds === null
-            ? 'Nie ma zadnego zarejestrowanego heartbeat dla tej kolejki.'
+            ? 'Nie ma żadnego zarejestrowanego heartbeat dla tej kolejki.'
             : sprintf(
-                'Ostatni heartbeat byl %ds temu - to wiecej niz jeden przegapiony cykl crona (worker startuje z crona co ok. %ds).',
+                'Ostatni heartbeat był %ds temu - to więcej niż jeden przegapiony cykl crona (worker startuje z crona co ok. %ds).',
                 $seconds,
                 $cronIntervalSeconds
             );
@@ -474,6 +530,8 @@ final class AdminController
             'message' => sprintf('%s %s', $status, $impact),
             'lastSeenAt' => $activity['lastSeenAt'] ?? null,
             'nextExpectedAt' => $activity['nextExpectedAt'] ?? null,
+            'blocking' => true,
+            'remedy' => 'Sprawdź, czy cron uruchamia workera i czy proces nie kończy się błędem zaraz po starcie.',
         ];
     }
 
