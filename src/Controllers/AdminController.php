@@ -76,6 +76,7 @@ final class AdminController
             'staleProcessingCount' => $this->repository->staleProcessingCount($now),
         ];
         $rateLimit = $this->rateLimitRepository->globalUsage($globalLimit, $globalSince, $globalWindowMinutes);
+        $gmailUsage = $this->gmailProviderUsage();
         $failuresSince = (new \DateTimeImmutable('-24 hours'))->format('Y-m-d H:i:s');
 
         $throughput = [
@@ -112,7 +113,7 @@ final class AdminController
             'rateLimit' => [
                 'global' => $rateLimit,
                 'provider' => [
-                    'gmail' => $this->gmailProviderUsage(),
+                    'gmail' => $gmailUsage,
                 ],
                 'byClient' => $this->byClientUsage($globalWindowMinutes),
                 'intake' => $this->intakeUsage(),
@@ -142,6 +143,7 @@ final class AdminController
                 $statusCounts,
                 $backlog,
                 $rateLimit,
+                $gmailUsage,
                 $lastActivity,
                 $cronIntervalSeconds,
                 $staleCriticalSeconds,
@@ -348,6 +350,7 @@ final class AdminController
      * @param array<string, int> $statusCounts
      * @param array<string, mixed> $backlog
      * @param array<string, mixed> $rateLimit
+     * @param array<string, mixed> $gmailUsage
      * @param array<string, array<string, mixed>> $lastActivity
      * @return list<array<string, mixed>>
      */
@@ -355,6 +358,7 @@ final class AdminController
         array $statusCounts,
         array $backlog,
         array $rateLimit,
+        array $gmailUsage,
         array $lastActivity,
         int $cronIntervalSeconds,
         int $staleCriticalSeconds,
@@ -488,6 +492,21 @@ final class AdminController
                 'remedy' => sprintf(
                     'Nic nie rób - limit odnowi się o %s.',
                     $rateLimit['retryAfter'] ?? 'nieznanym czasie'
+                ),
+            ];
+        }
+        if (($gmailUsage['enabled'] ?? false) === true && ($gmailUsage['remaining'] ?? null) === 0) {
+            $issues[] = [
+                'severity' => 'warning',
+                'label' => 'Ostrzeżenie',
+                'type' => 'gmail_rate_limited',
+                'title' => 'Dzienny limit Gmaila jest wyczerpany',
+                'message' => 'Wiadomości techniczne (kolejka FIFO przez Gmail SMTP) poczekają do zwolnienia dziennego limitu przed kolejnymi wysyłkami.',
+                'retryAfter' => $gmailUsage['retryAfter'] ?? null,
+                'blocking' => true,
+                'remedy' => sprintf(
+                    'Nic nie rób - limit odnowi się o %s.',
+                    $gmailUsage['retryAfter'] ?? 'nieznanym czasie'
                 ),
             ];
         }

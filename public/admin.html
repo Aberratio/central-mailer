@@ -1150,6 +1150,10 @@
           const when = issue.retryAfter ? renewalLabel(issue.retryAfter, generatedAt) : 'w nieznanym czasie';
           return { text: `Kolejka czeka na odnowienie limitu. ${waiting} wiadomości ruszy ${when}.`, cls };
         }
+        case 'gmail_rate_limited': {
+          const when = issue.retryAfter ? renewalLabel(issue.retryAfter, generatedAt) : 'w nieznanym czasie';
+          return { text: `Kolejka techniczna czeka na odnowienie dziennego limitu Gmaila, ${when}.`, cls };
+        }
         case 'stale_processing':
           return { text: `${issue.count} wiadomości utknęło w wysyłaniu, worker zwolni je automatycznie.`, cls };
         case 'unknown_emails':
@@ -1172,7 +1176,7 @@
     }
 
     function blockerWhenHtml(issue) {
-      if (issue.type === 'rate_limited' && issue.retryAfter) {
+      if ((issue.type === 'rate_limited' || issue.type === 'gmail_rate_limited') && issue.retryAfter) {
         return escapeHtml(renewalLabel(issue.retryAfter, lastGeneratedAt));
       }
       if (issue.type === 'stale_processing') {

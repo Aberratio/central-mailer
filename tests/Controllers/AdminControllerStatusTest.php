@@ -207,6 +207,30 @@ final class AdminControllerStatusTest extends DatabaseTestCase
         self::assertStringContainsString((string) $issue['retryAfter'], $issue['remedy']);
     }
 
+    public function testGmailRateLimitedIssueIsBlockingWithRetryAfterRemedy(): void
+    {
+        $this->insertScopeReservation('provider:gmail', 0);
+        $this->insertScopeReservation('provider:gmail', 1);
+
+        $payload = $this->decode($this->makeController([
+            'GMAIL_RATE_LIMIT_COUNT' => '2',
+            'GMAIL_RATE_LIMIT_WINDOW_MINUTES' => '1440',
+        ]));
+
+        $types = array_column($payload['issues'], 'type');
+        self::assertContains('gmail_rate_limited', $types);
+        $issue = $payload['issues'][array_search('gmail_rate_limited', $types, true)];
+        self::assertTrue($issue['blocking']);
+        self::assertStringContainsString((string) $issue['retryAfter'], $issue['remedy']);
+    }
+
+    public function testGmailRateLimitedIssueIsNotReportedWhenCapIsDisabled(): void
+    {
+        $payload = $this->decode($this->makeController(['GMAIL_RATE_LIMIT_COUNT' => '0']));
+
+        self::assertNotContains('gmail_rate_limited', array_column($payload['issues'], 'type'));
+    }
+
     private function insertScopeReservation(string $scope, int $secondsAgoOffset = 0): void
     {
         $reservedAt = (new \DateTimeImmutable(sprintf('-%d seconds', $secondsAgoOffset)))->format('Y-m-d H:i:s');
