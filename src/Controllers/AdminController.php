@@ -63,14 +63,29 @@ final class AdminController
         $globalLimit = $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100);
         $globalSince = (new \DateTimeImmutable(sprintf('-%d minutes', $globalWindowMinutes)))->format('Y-m-d H:i:s');
         $statusCounts = $this->repository->globalStatusCounts();
+        $oldestUnsent = $this->repository->oldestUnsentGlobal();
         $backlog = [
-            'oldestUnsent' => $this->repository->oldestUnsentGlobal(),
+            'oldestUnsent' => $oldestUnsent,
+            'oldestUnsentAgeSeconds' => $oldestUnsent === null
+                ? null
+                : self::secondsSince((string) $oldestUnsent['created_at'], new \DateTimeImmutable()),
             'nextDelayedAt' => $this->repository->nextDelayedAttemptGlobal($now),
             'technicalBlocker' => $this->repository->technicalBlockerGlobal(),
             'staleProcessingCount' => $this->repository->staleProcessingCount($now),
         ];
         $rateLimit = $this->rateLimitRepository->globalUsage($globalLimit, $globalSince, $globalWindowMinutes);
         $failuresSince = (new \DateTimeImmutable('-24 hours'))->format('Y-m-d H:i:s');
+
+        $throughput = [
+            'sentLastHour' => $this->repository->sentCountSince(
+                (new \DateTimeImmutable('-1 hour'))->format('Y-m-d H:i:s')
+            ),
+        ];
+
+        $failedLookbackMinutes = max(1, $this->env->int('MONITOR_FAILED_LOOKBACK_MINUTES', 15));
+        $failedRecentSince = (new \DateTimeImmutable(sprintf('-%d minutes', $failedLookbackMinutes)))->format('Y-m-d H:i:s');
+        $recentFailedCount = $this->repository->failedCountSince($failedRecentSince);
+        $latencyAlertSeconds = max(60, $this->env->int('QUEUE_LATENCY_ALERT_SECONDS', 900));
 
         return $this->json([
             'generatedAt' => $now,
@@ -94,7 +109,12 @@ final class AdminController
             ],
             'rateLimit' => [
                 'global' => $rateLimit,
+                'provider' => [
+                    'gmail' => $this->gmailProviderUsage(),
+                ],
+                'byClient' => $this->byClientUsage($globalWindowMinutes),
             ],
+            'throughput' => $throughput,
             'mailers' => $this->mailers(),
             'workers' => [
                 'heartbeatFreshSeconds' => $heartbeatFreshSeconds,
@@ -115,8 +135,62 @@ final class AdminController
                     'processedCount' => (int) $row['processed_count'],
                 ], $activeWorkers),
             ],
-            'issues' => $this->issues($statusCounts, $backlog, $rateLimit, $lastActivity, $cronIntervalSeconds, $staleCriticalSeconds),
+            'issues' => $this->issues(
+                $statusCounts,
+                $backlog,
+                $rateLimit,
+                $lastActivity,
+                $cronIntervalSeconds,
+                $staleCriticalSeconds,
+                $recentFailedCount,
+                $failedLookbackMinutes,
+                $latencyAlertSeconds
+            ),
         ]);
+    }
+
+    /**
+     * Gmail's daily cap is modelled as a provider-scoped rate limit (see EmailWorker::runOnceInternal()).
+     * A limit of 0 means the cap is disabled entirely - no reservations are made for it - so this must
+     * stay distinguishable from "configured, usage 0" or the panel would show a false sense of headroom.
+     *
+     * @return array{enabled: bool, used: int, limit: int, remaining: int|null, retryAfter: string|null}
+     */
+    private function gmailProviderUsage(): array
+    {
+        $limit = $this->env->int('GMAIL_RATE_LIMIT_COUNT', 0);
+        if ($limit <= 0) {
+            return ['enabled' => false, 'used' => 0, 'limit' => 0, 'remaining' => null, 'retryAfter' => null];
+        }
+
+        $windowMinutes = $this->env->int('GMAIL_RATE_LIMIT_WINDOW_MINUTES', 1440);
+        $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
+        $usage = $this->rateLimitRepository->scopeUsage('provider:gmail', $limit, $since, $windowMinutes);
+
+        return ['enabled' => true, ...$usage];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function byClientUsage(int $globalWindowMinutes): array
+    {
+        $byClient = [];
+        foreach ($this->repository->statusCountsBySourceApp() as $client) {
+            $sourceApp = (string) $client['sourceApp'];
+            $clientLimit = $this->repository->clientRateLimitForSourceApp($sourceApp);
+            $rateLimitCount = $clientLimit['rateLimitCount'] ?? null;
+            $windowMinutes = $clientLimit['rateLimitWindowMinutes'] ?? $globalWindowMinutes;
+            $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
+            $usage = $this->rateLimitRepository->clientUsage($sourceApp, $rateLimitCount, $since, $windowMinutes);
+
+            $byClient[] = [
+                'sourceApp' => $sourceApp,
+                'hasOwnLimit' => $rateLimitCount !== null,
+                'windowMinutes' => $windowMinutes,
+                ...$usage,
+            ];
+        }
+
+        return $byClient;
     }
 
     public function unsent(ServerRequestInterface $request): ResponseInterface
@@ -238,14 +312,23 @@ final class AdminController
         return $this->json(['id' => $id, 'status' => 'pending']);
     }
 
-    /** @param array<string, int> $statusCounts @param array<string, mixed> $backlog @param array<string, mixed> $rateLimit @param array<string, array<string, mixed>> $lastActivity @return list<array<string, mixed>> */
+    /**
+     * @param array<string, int> $statusCounts
+     * @param array<string, mixed> $backlog
+     * @param array<string, mixed> $rateLimit
+     * @param array<string, array<string, mixed>> $lastActivity
+     * @return list<array<string, mixed>>
+     */
     private function issues(
         array $statusCounts,
         array $backlog,
         array $rateLimit,
         array $lastActivity,
         int $cronIntervalSeconds,
-        int $staleCriticalSeconds
+        int $staleCriticalSeconds,
+        int $recentFailedCount,
+        int $failedLookbackMinutes,
+        int $latencyAlertSeconds
     ): array {
         $issues = [];
         $standardIssue = $this->workerMissingIssue(
@@ -278,6 +361,8 @@ final class AdminController
                 'title' => 'Wiadomosci utknely w przetwarzaniu',
                 'message' => 'Czesc wiadomosci ma wygasnieta dzierzawe przetwarzania. Worker powinien je zwolnic przy kolejnym przebiegu.',
                 'count' => $backlog['staleProcessingCount'],
+                'blocking' => false,
+                'remedy' => 'Nic nie rob - worker zwolni te wiadomosci automatycznie przy najblizszym przebiegu.',
             ];
         }
         if (($statusCounts['unknown'] ?? 0) > 0) {
@@ -288,26 +373,51 @@ final class AdminController
                 'title' => 'Wiadomosci w kwarantannie (nieznany wynik wysylki)',
                 'message' => 'Proba wysylki mogla dotrzec do serwera SMTP, ale wynik jest nieznany. Sprawdz logi i skrzynke nadawcy, a potem uzyj przycisku ponownego kolejkowania.',
                 'count' => $statusCounts['unknown'],
+                'blocking' => false,
+                'remedy' => 'Sprawdz logi i skrzynke nadawcy dla kazdej wiadomosci, a potem uzyj przycisku ponownego kolejkowania.',
             ];
         }
-        if (($statusCounts['failed'] ?? 0) > 0) {
+        // Gated on recent activity (same lookback as scripts/monitor-queue.php), not the
+        // lifetime count - an old, already-reviewed failure shouldn't keep the banner lit.
+        if ($recentFailedCount > 0) {
             $issues[] = [
                 'severity' => 'warning',
                 'label' => 'Ostrzezenie',
                 'type' => 'failed_emails',
-                'title' => 'Sa trwale nieudane wysylki',
-                'message' => 'Te wiadomosci wyczerpaly limit prob i nie beda juz wysylane automatycznie.',
-                'count' => $statusCounts['failed'],
+                'title' => 'Sa niedawne trwale nieudane wysylki',
+                'message' => sprintf(
+                    '%d wiadomosc(i) trwale nie powiodly sie w ciagu ostatnich %d min. Te wiadomosci wyczerpaly limit prob i nie beda juz wysylane automatycznie.',
+                    $recentFailedCount,
+                    $failedLookbackMinutes
+                ),
+                'count' => $recentFailedCount,
+                'blocking' => false,
+                'remedy' => 'Sprawdz kody bledow w sekcji "Niepowodzenia" i popraw przyczyne (np. zly adres, odrzucenie SMTP).',
             ];
         }
-        if (($statusCounts['retry'] ?? 0) > 0) {
+        // Gated on how long the oldest unsent email has actually been waiting
+        // (QUEUE_LATENCY_ALERT_SECONDS, same threshold scripts/monitor-queue.php alerts on),
+        // not the raw retry count - a handful of retries within their normal backoff window
+        // is expected traffic, not an issue.
+        $oldestUnsentAgeSeconds = $backlog['oldestUnsentAgeSeconds'] ?? null;
+        $backlogIsStale = $oldestUnsentAgeSeconds !== null && $oldestUnsentAgeSeconds >= $latencyAlertSeconds;
+        if (($statusCounts['retry'] ?? 0) > 0 && $backlogIsStale) {
+            $nextDelayedAt = $backlog['nextDelayedAt'] ?? null;
             $issues[] = [
                 'severity' => 'warning',
                 'label' => 'Ostrzezenie',
                 'type' => 'retry_backlog',
-                'title' => 'Wiadomosci czekaja na ponowna probe',
-                'message' => 'Czesc wysylek czeka na ponowna probe. To zwykle oznacza blad SMTP, limit lub chwilowy problem dostawcy.',
+                'title' => 'Wiadomosci czekaja na ponowna probe dluzej niz zwykle',
+                'message' => sprintf(
+                    'Najstarsza niewyslana wiadomosc czeka juz %ds - to wiecej niz prog %ds. Zwykle oznacza to blad SMTP, limit lub chwilowy problem dostawcy.',
+                    $oldestUnsentAgeSeconds,
+                    $latencyAlertSeconds
+                ),
                 'count' => $statusCounts['retry'],
+                'blocking' => false,
+                'remedy' => $nextDelayedAt !== null
+                    ? sprintf('Nic nie rob - najblizsza automatyczna proba zaplanowana jest o %s.', $nextDelayedAt)
+                    : 'Sprawdz worker - wiadomosci czekaja dluzej niz zwykle mimo braku zaplanowanej kolejnej proby.',
             ];
         }
         if (($rateLimit['remaining'] ?? null) === 0) {
@@ -318,16 +428,11 @@ final class AdminController
                 'title' => 'Globalny limit wysylki jest wyczerpany',
                 'message' => 'Worker poczeka do zwolnienia okna limitu przed kolejnymi wysylkami.',
                 'retryAfter' => $rateLimit['retryAfter'] ?? null,
-            ];
-        }
-        if (($statusCounts['pending'] ?? 0) > 0 || ($statusCounts['processing'] ?? 0) > 0) {
-            $issues[] = [
-                'severity' => 'info',
-                'label' => 'Informacja',
-                'type' => 'active_backlog',
-                'title' => 'Kolejka ma aktywne wiadomosci',
-                'message' => 'Sa wiadomosci oczekujace albo aktualnie przetwarzane przez workery.',
-                'count' => ($statusCounts['pending'] ?? 0) + ($statusCounts['processing'] ?? 0),
+                'blocking' => true,
+                'remedy' => sprintf(
+                    'Nic nie rob - limit odnowi sie o %s.',
+                    $rateLimit['retryAfter'] ?? 'nieznanym czasie'
+                ),
             ];
         }
 

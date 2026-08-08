@@ -70,6 +70,37 @@ final class RateLimitRepositoryTest extends DatabaseTestCase
         self::assertSame('2026-01-01 10:05:01', $usage['retryAfter']);
     }
 
+    public function testScopeUsageReflectsReservationsForThatScopeOnly(): void
+    {
+        $repository = new RateLimitRepository($this->pdo);
+        $since = '2026-01-01 09:45:00';
+
+        $this->insertReservation('provider:gmail', '2026-01-01 09:46:00');
+        $this->insertReservation('app-a', '2026-01-01 09:50:00');
+
+        $usage = $repository->scopeUsage('provider:gmail', 2, $since, 1440);
+
+        self::assertSame(1, $usage['used']);
+        self::assertSame(2, $usage['limit']);
+        self::assertSame(1, $usage['remaining']);
+        self::assertNull($usage['retryAfter']);
+    }
+
+    public function testScopeUsageReportsRetryAfterOnceScopeLimitIsReached(): void
+    {
+        $repository = new RateLimitRepository($this->pdo);
+        $since = '2026-01-01 09:45:00';
+
+        $this->insertReservation('provider:gmail', '2026-01-01 09:46:00');
+        $this->insertReservation('provider:gmail', '2026-01-01 09:50:00');
+
+        $usage = $repository->scopeUsage('provider:gmail', 2, $since, 1440);
+
+        self::assertSame(2, $usage['used']);
+        self::assertSame(0, $usage['remaining']);
+        self::assertSame('2026-01-02 09:46:01', $usage['retryAfter']);
+    }
+
     private function insertReservation(string $sourceApp, string $reservedAt): void
     {
         $stmt = $this->pdo->prepare(
