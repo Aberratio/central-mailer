@@ -1362,6 +1362,26 @@ final class EmailQueueRepository
         return $stmt->fetchAll();
     }
 
+    public function sentCountSince(string $since): int
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM email_queue WHERE status = 'sent' AND sent_at >= :since"
+        );
+        $stmt->execute(['since' => $since]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    public function failedCountSince(string $since): int
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM email_queue WHERE status = 'failed' AND updated_at >= :since"
+        );
+        $stmt->execute(['since' => $since]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
     /** @return array{rateLimitCount: int|null, rateLimitWindowMinutes: int|null}|null */
     public function clientRateLimitForSourceApp(string $sourceApp): ?array
     {

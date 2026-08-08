@@ -186,6 +186,36 @@ final class RateLimitRepository
         ];
     }
 
+    /**
+     * Read-only counterpart to tryReserveScope(): usage for a dedicated scope
+     * (e.g. "provider:gmail"), same shape as globalUsage().
+     *
+     * @return array{used: int, limit: int, remaining: int, retryAfter: string|null}
+     */
+    public function scopeUsage(string $scope, int $limit, string $since, int $windowMinutes): array
+    {
+        $countStmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM email_rate_limit_reservations
+             WHERE source_app = :scope AND reserved_at >= :since'
+        );
+        $countStmt->execute(['scope' => $scope, 'since' => $since]);
+        $used = (int) $countStmt->fetchColumn();
+
+        return [
+            'used' => $used,
+            'limit' => $limit,
+            'remaining' => max(0, $limit - $used),
+            'retryAfter' => $used >= $limit
+                ? $this->retryAfterForWindow(
+                    'SELECT MIN(reserved_at) FROM email_rate_limit_reservations
+                     WHERE source_app = :scope AND reserved_at >= :since',
+                    ['scope' => $scope, 'since' => $since],
+                    $windowMinutes
+                )
+                : null,
+        ];
+    }
+
     /** @return array{used: int, limit: int|null, remaining: int|null, retryAfter: string|null} */
     public function clientUsage(string $sourceApp, ?int $limit, string $since, int $windowMinutes): array
     {

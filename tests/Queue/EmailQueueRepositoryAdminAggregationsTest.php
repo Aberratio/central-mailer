@@ -79,6 +79,47 @@ final class EmailQueueRepositoryAdminAggregationsTest extends DatabaseTestCase
         self::assertSame('technical-blocker', $unsent[0]['id']);
     }
 
+    public function testSentCountSinceCountsOnlySentEmailsAfterCutoff(): void
+    {
+        $this->insertQueueRow([
+            'id' => 'sent-recent',
+            'status' => 'sent',
+            'sent_at' => '2026-01-01 10:30:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'sent-old',
+            'status' => 'sent',
+            'sent_at' => '2026-01-01 09:00:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'pending-ignored',
+            'status' => 'pending',
+        ]);
+
+        self::assertSame(1, $this->repository->sentCountSince('2026-01-01 10:00:00'));
+    }
+
+    public function testFailedCountSinceCountsOnlyFailedEmailsUpdatedAfterCutoff(): void
+    {
+        $this->insertQueueRow([
+            'id' => 'failed-recent',
+            'status' => 'failed',
+            'updated_at' => '2026-01-01 10:30:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'failed-old',
+            'status' => 'failed',
+            'updated_at' => '2026-01-01 09:00:00',
+        ]);
+        $this->insertQueueRow([
+            'id' => 'retry-ignored',
+            'status' => 'retry',
+            'updated_at' => '2026-01-01 10:30:00',
+        ]);
+
+        self::assertSame(1, $this->repository->failedCountSince('2026-01-01 10:00:00'));
+    }
+
     public function testOldestUnsentGlobalIgnoresTerminalStatuses(): void
     {
         $this->insertQueueRow([
