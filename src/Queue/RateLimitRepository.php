@@ -177,7 +177,8 @@ final class RateLimitRepository
             'remaining' => max(0, $limit - $used),
             'retryAfter' => $used >= $limit
                 ? $this->retryAfterForWindow(
-                    'SELECT MIN(reserved_at) FROM email_rate_limit_reservations WHERE reserved_at >= :since',
+                    "SELECT MIN(reserved_at) FROM email_rate_limit_reservations
+                     WHERE reserved_at >= :since AND source_app NOT LIKE 'provider:%'",
                     ['since' => $since],
                     $windowMinutes
                 )
