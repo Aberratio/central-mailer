@@ -126,6 +126,14 @@
       margin-bottom: 12px;
     }
 
+    h3 {
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      margin-bottom: 8px;
+    }
+
     .subtle {
       color: var(--muted);
       font-size: 13px;
@@ -276,6 +284,88 @@
     .pill.bad { color: var(--bad); background: var(--bad-bg); border-color: #f5c4c0; }
     .pill.info { color: var(--info); background: var(--info-bg); border-color: #bdd8f4; }
 
+    .verdict {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 18px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+
+    .verdict .pill { flex: 0 0 auto; }
+
+    .verdict-text {
+      font-size: 16px;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .verdict.ok { background: var(--ok-bg); border-color: #b9e5d0; }
+    .verdict.warn { background: var(--warn-bg); border-color: #f4d49b; }
+    .verdict.bad { background: var(--bad-bg); border-color: #f5c4c0; }
+
+    .blocker-panel {
+      border-color: #f4d49b;
+    }
+
+    .blocker-panel .kv dt {
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .tile-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .tile {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .tile .row-head h2 {
+      margin-bottom: 0;
+    }
+
+    details.tech-details {
+      margin-top: 4px;
+    }
+
+    details.tech-details summary {
+      cursor: pointer;
+      color: var(--info);
+      font-size: 13px;
+    }
+
+    details.tech-details .kv {
+      margin-top: 10px;
+    }
+
+    .metric-groups {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .metric-groups .status-strip {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .headline-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .headline-strip .metric .value {
+      font-size: 20px;
+    }
+
     .grid-2 {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -305,7 +395,7 @@
       overflow-wrap: anywhere;
     }
 
-    .issue-list, .worker-list, .client-list, .mailer-list {
+    .issue-list, .worker-list, .client-list, .mailer-list, .limit-list {
       display: grid;
       gap: 9px;
     }
@@ -449,7 +539,7 @@
       .health {
         grid-column: 1 / -1;
       }
-      .grid-2, .grid-3 {
+      .grid-2, .grid-3, .tile-grid, .metric-groups, .headline-strip {
         grid-template-columns: 1fr;
       }
       .mailer-list {
@@ -465,7 +555,7 @@
         margin-top: 7vh;
         padding: 16px;
       }
-      .topbar, .health, .row-head {
+      .topbar, .health, .row-head, .verdict {
         align-items: stretch;
         flex-direction: column;
       }
@@ -596,7 +686,7 @@
         <div class="mark">CM</div>
         <div>
           <h1>Panel administratora mailera</h1>
-          <p class="subtle">Globalny status kolejek, workerow i limitow wysylki.</p>
+          <p class="subtle">Globalny status kolejek, workerów i limitów wysyłki.</p>
         </div>
       </div>
       <form id="loginForm">
@@ -606,9 +696,9 @@
         </label>
         <label class="checkbox-row">
           <input id="rememberKey" type="checkbox">
-          Zapamietaj w tej przegladarce
+          Zapamiętaj w tej przeglądarce
         </label>
-        <button class="primary" type="submit">Polacz</button>
+        <button class="primary" type="submit">Połącz</button>
         <div id="loginError" class="error hidden"></div>
       </form>
     </section>
@@ -619,11 +709,11 @@
           <div class="mark">CM</div>
           <div>
           <h1>Panel administratora mailera</h1>
-            <p class="subtle" id="lastRefresh">Nie odswiezono</p>
+            <p class="subtle" id="lastRefresh">Nie odświeżono</p>
           </div>
         </div>
         <div class="toolbar">
-          <button id="refreshBtn" type="button">Odswiez</button>
+          <button id="refreshBtn" type="button">Odśwież</button>
           <button id="logoutBtn" type="button">Wyloguj</button>
         </div>
       </header>
@@ -631,26 +721,92 @@
       <div id="pageError" class="error hidden"></div>
 
       <nav class="main-nav" role="tablist" aria-label="Sekcje panelu">
-        <button id="navQueue" class="active" type="button" role="tab" aria-controls="tabQueue" aria-selected="true">Kolejka</button>
-        <button id="navSent" type="button" role="tab" aria-controls="tabSent" aria-selected="false">Wyslane</button>
-        <button id="navStats" type="button" role="tab" aria-controls="tabStats" aria-selected="false">Statystyki</button>
+        <button id="navOverview" class="active" type="button" role="tab" aria-controls="tabOverview" aria-selected="true">Przegląd</button>
+        <button id="navQueue" type="button" role="tab" aria-controls="tabQueue" aria-selected="false">Kolejka</button>
+        <button id="navSent" type="button" role="tab" aria-controls="tabSent" aria-selected="false">Wysłane</button>
         <button id="navConfig" type="button" role="tab" aria-controls="tabConfig" aria-selected="false">Konfiguracja</button>
       </nav>
 
-      <section id="tabQueue" class="tab-panel" role="tabpanel" aria-labelledby="navQueue">
+      <section id="tabOverview" class="tab-panel" role="tabpanel" aria-labelledby="navOverview">
+        <div id="verdictBar" class="verdict info">
+          <span id="verdictPill" class="pill info">Ładowanie</span>
+          <p id="verdictText" class="verdict-text">Pobieram dane z API.</p>
+        </div>
+
+        <div id="blockerCard" class="panel blocker-panel hidden">
+          <h2>Co blokuje kolejkę</h2>
+          <dl class="kv">
+            <dt>Przyczyna</dt><dd id="blockerCause"></dd>
+            <dt>Skutek</dt><dd id="blockerEffect"></dd>
+            <dt>Kiedy samo ruszy</dt><dd id="blockerWhen"></dd>
+            <dt>Co zrobić</dt><dd id="blockerRemedy"></dd>
+          </dl>
+        </div>
+
+        <section class="panel">
+          <h2>Limity</h2>
+          <div id="limits" class="limit-list"></div>
+        </section>
+
+        <section class="tile-grid">
+          <div id="tileStandard" class="panel tile"></div>
+          <div id="tileTechnical" class="panel tile"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Kolejka w liczbach</h2>
+          <div class="metric-groups">
+            <div>
+              <h3>W toku</h3>
+              <div class="status-strip">
+                <div class="metric"><div class="label">Oczekują</div><div class="value" id="countPending">0</div></div>
+                <div class="metric"><div class="label">Wysyłane</div><div class="value" id="countProcessing">0</div></div>
+                <div class="metric"><div class="label">Ponowią próbę</div><div class="value" id="countRetry">0</div></div>
+              </div>
+            </div>
+            <div>
+              <h3>Wymaga uwagi</h3>
+              <div class="status-strip">
+                <div class="metric"><div class="label">Nieudane</div><div class="value" id="countFailed">0</div></div>
+                <div class="metric"><div class="label">Kwarantanna</div><div class="value" id="countUnknown">0</div></div>
+                <div class="metric"><div class="label">Wysłane</div><div class="value" id="countSent">0</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="headline-strip">
+            <div class="metric"><div class="label">Wiek najstarszej oczekującej</div><div class="value" id="headlineOldest">-</div></div>
+            <div class="metric"><div class="label">Wysłane w ostatniej godzinie</div><div class="value" id="headlineSentHour">0</div></div>
+            <div class="metric"><div class="label">Kolejka rozładuje się</div><div class="value" id="headlineDrain">-</div></div>
+          </div>
+        </section>
+
+        <section class="grid-2">
+          <div class="panel">
+            <h2>Klienci</h2>
+            <div id="clients" class="client-list"></div>
+          </div>
+          <div class="panel">
+            <h2>Stan techniczny</h2>
+            <div class="kv" id="techHealth"></div>
+            <p class="subtle" id="apiVersion" style="margin-top: 10px;"></p>
+          </div>
+        </section>
+      </section>
+
+      <section id="tabQueue" class="tab-panel hidden" role="tabpanel" aria-labelledby="navQueue">
         <div class="panel">
           <div class="row-head" style="margin-bottom: 12px;">
             <h2 style="margin-bottom: 0;">Kolejka</h2>
-            <span class="subtle" id="unsentCount">0 rekordow</span>
+            <span class="subtle" id="unsentCount">0 rekordów</span>
           </div>
-          <p class="subtle" style="margin-bottom: 12px;">Aktywna kolejka i bledy wysylki.</p>
+          <p class="subtle" style="margin-bottom: 12px;">Aktywna kolejka i błędy wysyłki.</p>
           <div class="filters">
             <select id="sourceFilter" aria-label="Filtr klienta"></select>
             <select id="statusFilter" aria-label="Filtr statusu">
               <option value="">Wszystkie statusy</option>
               <option value="pending">oczekuje</option>
-              <option value="processing">wysylanie</option>
-              <option value="retry">ponowna proba</option>
+              <option value="processing">wysyłanie</option>
+              <option value="retry">ponowna próba</option>
               <option value="failed">nieudane</option>
               <option value="unknown">nieznany wynik</option>
             </select>
@@ -660,10 +816,10 @@
               <option value="high">wysoki</option>
               <option value="technical">techniczny</option>
             </select>
-            <input id="contextFilter" type="search" placeholder="Filtr zawodow (ID kontekstu)" aria-label="Filtr kontekstu">
+            <input id="contextFilter" type="search" placeholder="Filtr zawodów (ID kontekstu)" aria-label="Filtr kontekstu">
             <input id="searchFilter" class="search" type="search" placeholder="Szukaj po odbiorcy, temacie albo ID">
           </div>
-          <div id="emptyUnsent" class="empty hidden">Brak niewyslanych wiadomosci.</div>
+          <div id="emptyUnsent" class="empty hidden">Brak niewysłanych wiadomości.</div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -675,8 +831,8 @@
                   <th data-sort="subject">Temat<span class="sort-arrow"></span></th>
                   <th>Pochodzenie</th>
                   <th data-sort="age">Wiek<span class="sort-arrow"></span></th>
-                  <th data-sort="delayReason">Powod oczekiwania<span class="sort-arrow"></span></th>
-                  <th>Ostatni blad</th>
+                  <th data-sort="delayReason">Powód oczekiwania<span class="sort-arrow"></span></th>
+                  <th>Ostatni błąd</th>
                 </tr>
               </thead>
               <tbody id="unsentRows"></tbody>
@@ -688,22 +844,22 @@
       <section id="tabSent" class="tab-panel hidden" role="tabpanel" aria-labelledby="navSent">
         <div class="panel">
           <div class="row-head" style="margin-bottom: 12px;">
-            <h2 style="margin-bottom: 0;">Wyslane</h2>
-            <span class="subtle" id="sentCount">0 rekordow</span>
+            <h2 style="margin-bottom: 0;">Wysłane</h2>
+            <span class="subtle" id="sentCount">0 rekordów</span>
           </div>
-          <p class="subtle" style="margin-bottom: 12px;">Ostatnie wiadomosci przyjete przez SMTP.</p>
+          <p class="subtle" style="margin-bottom: 12px;">Ostatnie wiadomości przyjęte przez SMTP.</p>
           <div class="filters">
-            <select id="sentSourceFilter" aria-label="Filtr klienta dla wyslanych"></select>
-            <select id="sentPriorityFilter" aria-label="Filtr priorytetu dla wyslanych">
+            <select id="sentSourceFilter" aria-label="Filtr klienta dla wysłanych"></select>
+            <select id="sentPriorityFilter" aria-label="Filtr priorytetu dla wysłanych">
               <option value="">Wszystkie priorytety</option>
               <option value="normal">normalny</option>
               <option value="high">wysoki</option>
               <option value="technical">techniczny</option>
             </select>
-            <input id="sentContextFilter" type="search" placeholder="Filtr zawodow (ID kontekstu)" aria-label="Filtr kontekstu dla wyslanych">
+            <input id="sentContextFilter" type="search" placeholder="Filtr zawodów (ID kontekstu)" aria-label="Filtr kontekstu dla wysłanych">
             <input id="sentSearchFilter" class="search" type="search" placeholder="Szukaj po odbiorcy, temacie, ID albo ID dostawcy">
           </div>
-          <div id="emptySent" class="empty hidden">Brak wyslanych wiadomosci.</div>
+          <div id="emptySent" class="empty hidden">Brak wysłanych wiadomości.</div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -714,7 +870,7 @@
                   <th data-sort="to">Odbiorca<span class="sort-arrow"></span></th>
                   <th data-sort="subject">Temat<span class="sort-arrow"></span></th>
                   <th>Pochodzenie</th>
-                  <th data-sort="sentAt">Wyslano<span class="sort-arrow"></span></th>
+                  <th data-sort="sentAt">Wysłano<span class="sort-arrow"></span></th>
                   <th data-sort="providerMessageId">ID dostawcy<span class="sort-arrow"></span></th>
                 </tr>
               </thead>
@@ -722,58 +878,6 @@
             </table>
           </div>
         </div>
-      </section>
-
-      <section id="tabStats" class="tab-panel hidden" role="tabpanel" aria-labelledby="navStats">
-        <section class="status-strip">
-          <div class="panel health">
-            <div class="health-main">
-              <span id="healthPill" class="pill info">Ladowanie</span>
-              <h2 id="healthTitle">Status systemu</h2>
-              <p class="subtle" id="healthChecks">Pobieram dane z API.</p>
-              <p class="subtle" id="workerActivity"></p>
-            </div>
-            <div class="subtle mono" id="apiVersion"></div>
-          </div>
-          <div class="metric"><div class="label">Oczekuja</div><div class="value" id="countPending">0</div></div>
-          <div class="metric"><div class="label">Wysylane</div><div class="value" id="countProcessing">0</div></div>
-          <div class="metric"><div class="label">Ponowia probe</div><div class="value" id="countRetry">0</div></div>
-          <div class="metric"><div class="label">Wyslane</div><div class="value" id="countSent">0</div></div>
-          <div class="metric"><div class="label">Nieudane</div><div class="value" id="countFailed">0</div></div>
-          <div class="metric"><div class="label">Kwarantanna</div><div class="value" id="countUnknown">0</div></div>
-        </section>
-
-        <section class="grid-2">
-          <div class="panel">
-            <h2>Problemy operacyjne</h2>
-            <div id="issues" class="issue-list"></div>
-          </div>
-          <div class="panel">
-            <h2>Globalny rate limit</h2>
-            <dl class="kv">
-              <dt>Uzyte</dt><dd id="rateUsed">0</dd>
-              <dt>Limit</dt><dd id="rateLimit">0</dd>
-              <dt>Pozostalo</dt><dd id="rateRemaining">0</dd>
-              <dt>Ponowna proba po</dt><dd id="rateRetry">-</dd>
-            </dl>
-            <div class="bar" style="margin-top: 12px;"><span id="rateBar"></span></div>
-          </div>
-        </section>
-
-        <section class="grid-3">
-          <div class="panel">
-            <h2>Backlog</h2>
-            <dl class="kv" id="backlog"></dl>
-          </div>
-          <div class="panel">
-            <h2>Uruchomione workery</h2>
-            <div id="workers" class="worker-list"></div>
-          </div>
-          <div class="panel">
-            <h2>Klienci</h2>
-            <div id="clients" class="client-list"></div>
-          </div>
-        </section>
       </section>
 
       <section id="tabConfig" class="tab-panel hidden" role="tabpanel" aria-labelledby="navConfig">
@@ -797,34 +901,37 @@
       refreshBtn: document.getElementById('refreshBtn'),
       logoutBtn: document.getElementById('logoutBtn'),
       lastRefresh: document.getElementById('lastRefresh'),
-      healthPill: document.getElementById('healthPill'),
-      healthTitle: document.getElementById('healthTitle'),
-      healthChecks: document.getElementById('healthChecks'),
-      workerActivity: document.getElementById('workerActivity'),
+      verdictBar: document.getElementById('verdictBar'),
+      verdictPill: document.getElementById('verdictPill'),
+      verdictText: document.getElementById('verdictText'),
+      blockerCard: document.getElementById('blockerCard'),
+      blockerCause: document.getElementById('blockerCause'),
+      blockerEffect: document.getElementById('blockerEffect'),
+      blockerWhen: document.getElementById('blockerWhen'),
+      blockerRemedy: document.getElementById('blockerRemedy'),
+      limits: document.getElementById('limits'),
+      tileStandard: document.getElementById('tileStandard'),
+      tileTechnical: document.getElementById('tileTechnical'),
       apiVersion: document.getElementById('apiVersion'),
+      techHealth: document.getElementById('techHealth'),
       countPending: document.getElementById('countPending'),
       countProcessing: document.getElementById('countProcessing'),
       countRetry: document.getElementById('countRetry'),
       countSent: document.getElementById('countSent'),
       countFailed: document.getElementById('countFailed'),
       countUnknown: document.getElementById('countUnknown'),
-      issues: document.getElementById('issues'),
-      rateUsed: document.getElementById('rateUsed'),
-      rateLimit: document.getElementById('rateLimit'),
-      rateRemaining: document.getElementById('rateRemaining'),
-      rateRetry: document.getElementById('rateRetry'),
-      rateBar: document.getElementById('rateBar'),
-      backlog: document.getElementById('backlog'),
-      workers: document.getElementById('workers'),
+      headlineOldest: document.getElementById('headlineOldest'),
+      headlineSentHour: document.getElementById('headlineSentHour'),
+      headlineDrain: document.getElementById('headlineDrain'),
       clients: document.getElementById('clients'),
       mailers: document.getElementById('mailers'),
+      navOverview: document.getElementById('navOverview'),
       navQueue: document.getElementById('navQueue'),
       navSent: document.getElementById('navSent'),
-      navStats: document.getElementById('navStats'),
       navConfig: document.getElementById('navConfig'),
+      tabOverview: document.getElementById('tabOverview'),
       tabQueue: document.getElementById('tabQueue'),
       tabSent: document.getElementById('tabSent'),
-      tabStats: document.getElementById('tabStats'),
       tabConfig: document.getElementById('tabConfig'),
       sourceFilter: document.getElementById('sourceFilter'),
       statusFilter: document.getElementById('statusFilter'),
@@ -847,6 +954,7 @@
     let timer = null;
     let unsentEmails = [];
     let sentEmails = [];
+    let lastGeneratedAt = null;
     const unsentSort = { key: null, dir: 'asc' };
     const sentSort = { key: null, dir: 'asc' };
 
@@ -884,11 +992,14 @@
     els.contextFilter.addEventListener('input', scheduleContextRefresh);
     els.sentContextFilter.addEventListener('input', scheduleContextRefresh);
 
+    els.navOverview.addEventListener('click', () => setMainTab('overview'));
     els.navQueue.addEventListener('click', () => setMainTab('queue'));
     els.navSent.addEventListener('click', () => setMainTab('sent'));
-    els.navStats.addEventListener('click', () => setMainTab('stats'));
     els.navConfig.addEventListener('click', () => setMainTab('config'));
-    setMainTab(localStorage.getItem('centralMailerActiveTab') || 'queue');
+    // Users with a previously saved 'stats' tab (the old default view, now folded
+    // into Przeglad) must land on the overview, not on a tab that no longer exists.
+    const savedTab = localStorage.getItem('centralMailerActiveTab');
+    setMainTab(savedTab === 'stats' || !savedTab ? 'overview' : savedTab);
 
     makeSortable(document.querySelector('#tabQueue thead'), unsentSort, renderUnsent);
     makeSortable(document.querySelector('#tabSent thead'), sentSort, renderSent);
@@ -936,9 +1047,9 @@
         updateSourceFilter(status.statusCounts?.bySourceApp || []);
         renderUnsent();
         renderSent();
-        els.lastRefresh.textContent = `Ostatnie odswiezenie: ${new Date().toLocaleString()}`;
+        els.lastRefresh.textContent = `Ostatnie odświeżenie: ${new Date().toLocaleString()}`;
       } catch (error) {
-        showError(error.message || 'Nie udalo sie pobrac danych.');
+        showError(error.message || 'Nie udało się pobrać danych.');
       } finally {
         setBusy(false);
       }
@@ -956,168 +1067,323 @@
       return payload;
     }
 
+    async function apiPost(path, body) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'X-Admin-Key': adminKey,
+          'Accept': 'application/json',
+          ...(body ? { 'Content-Type': 'application/json' } : {})
+        },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : {};
+      if (!response.ok) {
+        throw new Error(errorLabel(payload.message || payload.error, response.status));
+      }
+      return payload;
+    }
+
     function renderStatus(data) {
-      const health = data.health || {};
+      lastGeneratedAt = data.generatedAt;
+      const issues = data.issues || [];
+      renderVerdict(data, issues);
+      renderBlocker(pickVerdictIssue(issues));
+      renderLimits(data.rateLimit || {}, data.generatedAt);
+      renderWorkerTiles(data.workers || {}, data.generatedAt);
+      renderQueueNumbers(data);
+      renderClients(data.statusCounts?.bySourceApp || []);
+      renderTechHealth(data.health || {});
+      renderMailers(data.mailers || []);
+    }
+
+    // --- Przeglad: werdykt -------------------------------------------------
+
+    function pickVerdictIssue(issues) {
+      const severityRank = { critical: 0, warning: 1, info: 2 };
+      const sorted = [...issues].sort((a, b) => {
+        const blockingDiff = (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1);
+        if (blockingDiff !== 0) return blockingDiff;
+        return (severityRank[a.severity] ?? 2) - (severityRank[b.severity] ?? 2);
+      });
+      return sorted[0] || null;
+    }
+
+    function renderVerdict(data, issues) {
+      const issue = pickVerdictIssue(issues);
+      const { text, cls } = verdictSentence(issue, data);
+      els.verdictBar.className = `verdict ${cls}`;
+      els.verdictPill.className = `pill ${cls}`;
+      els.verdictPill.textContent = cls === 'ok' ? 'OK' : cls === 'warn' ? 'UWAGA' : 'PROBLEM';
+      els.verdictText.textContent = text;
+    }
+
+    function verdictSentence(issue, data) {
+      const generatedAt = data.generatedAt;
       const counts = data.statusCounts?.global || {};
-      const healthStatus = health.status || 'unknown';
-      els.healthPill.className = `pill ${healthStatus === 'ok' ? 'ok' : 'bad'}`;
-      els.healthPill.textContent = healthStatus === 'ok' ? 'SPRAWNY' : 'PROBLEM';
-      els.healthTitle.textContent = healthStatus === 'ok' ? 'System dziala poprawnie' : 'System wymaga uwagi';
-      els.healthChecks.textContent = `Baza danych: ${checkLabel(health.checks?.database)} | Zalaczniki: ${checkLabel(health.checks?.attachments)} | Workery: ${checkLabel(health.checks?.workers)}`;
-      const lastActivity = data.workers?.lastActivity || {};
-      const lastRun = latestTimestamp(lastActivity.standard?.lastSeenAt, lastActivity.technical?.lastSeenAt);
-      const lastSent = latestTimestamp(lastActivity.standard?.lastProcessedAt, lastActivity.technical?.lastProcessedAt);
-      const lastRunAgo = lastRun ? agoLabel(lastRun, data.generatedAt) : null;
-      const lastSentAgo = lastSent ? agoLabel(lastSent, data.generatedAt) : null;
-      els.workerActivity.textContent = `Ostatni przebieg workera: ${lastRun ? `${lastRun}${lastRunAgo ? ` (${lastRunAgo})` : ''}` : 'brak danych'} | ostatnia wysylka: ${lastSent ? `${lastSent}${lastSentAgo ? ` (${lastSentAgo})` : ''}` : 'brak'}`;
-      els.apiVersion.textContent = health.apiVersion ? `Wersja API ${health.apiVersion}` : '';
+      if (!issue) {
+        const inQueue = (counts.pending || 0) + (counts.processing || 0) + (counts.retry || 0);
+        const lastActivity = data.workers?.lastActivity || {};
+        const lastSent = latestTimestamp(lastActivity.standard?.lastProcessedAt, lastActivity.technical?.lastProcessedAt);
+        const lastSentAgo = lastSent ? agoLabel(lastSent, generatedAt) : null;
+        return {
+          text: `Wszystko działa. ${inQueue} wiadomości w kolejce${lastSentAgo ? `, ostatnia wysłana ${lastSentAgo}.` : '.'}`,
+          cls: 'ok'
+        };
+      }
+
+      const cls = issue.blocking || issue.severity === 'critical' ? 'bad' : 'warn';
+      switch (issue.type) {
+        case 'worker_missing': {
+          const queueWord = issue.queue === 'standard' ? 'standardowy' : 'techniczny';
+          const ago = issue.lastSeenAt ? agoLabel(issue.lastSeenAt, generatedAt) : null;
+          const impact = issue.queue === 'standard' ? 'Nic nie wychodzi.' : 'Wiadomości techniczne stoją w kolejce.';
+          return { text: `Worker ${queueWord} nie działa${ago ? ` od ${ago}` : ''}. ${impact}`, cls };
+        }
+        case 'database_error':
+          return { text: 'Baza danych nie odpowiada. Panel i workery nie mogą pracować.', cls };
+        case 'attachments_error':
+          return { text: 'Katalog załączników nie jest zapisywalny. Wiadomości z załącznikami utkną.', cls };
+        case 'rate_limited': {
+          const waiting = (counts.pending || 0) + (counts.retry || 0);
+          const when = issue.retryAfter ? renewalLabel(issue.retryAfter, generatedAt) : 'w nieznanym czasie';
+          return { text: `Kolejka czeka na odnowienie limitu. ${waiting} wiadomości ruszy ${when}.`, cls };
+        }
+        case 'stale_processing':
+          return { text: `${issue.count} wiadomości utknęło w wysyłaniu, worker zwolni je automatycznie.`, cls };
+        case 'unknown_emails':
+          return { text: `${issue.count} wiadomości czeka w kwarantannie na sprawdzenie.`, cls };
+        default:
+          return { text: issue.message || issue.title, cls };
+      }
+    }
+
+    function renderBlocker(issue) {
+      if (!issue || !issue.blocking) {
+        els.blockerCard.classList.add('hidden');
+        return;
+      }
+      els.blockerCard.classList.remove('hidden');
+      els.blockerCause.textContent = issue.title || '-';
+      els.blockerEffect.textContent = issue.message || '-';
+      els.blockerWhen.innerHTML = blockerWhenHtml(issue);
+      els.blockerRemedy.textContent = issue.remedy || '-';
+    }
+
+    function blockerWhenHtml(issue) {
+      if (issue.type === 'rate_limited' && issue.retryAfter) {
+        return escapeHtml(renewalLabel(issue.retryAfter, lastGeneratedAt));
+      }
+      if (issue.type === 'stale_processing') {
+        return 'Przy najbliższym przebiegu workera (automatycznie).';
+      }
+      if (issue.type === 'unknown_emails') {
+        return 'Nie samo - wymaga ręcznego sprawdzenia.';
+      }
+      return 'Nie samo - wymaga sprawdzenia przez administratora.';
+    }
+
+    // --- Przeglad: limity ----------------------------------------------------
+
+    function limitState(row) {
+      if (row.enabled === false || row.limit === 0) {
+        return { word: 'wyłączony', cls: 'info' };
+      }
+      if (row.limit === null || row.limit === undefined) {
+        return { word: 'brak własnego limitu', cls: 'info' };
+      }
+      if ((row.remaining ?? null) === 0) {
+        return { word: 'wyczerpany — wstrzymane', cls: 'bad' };
+      }
+      const pct = row.limit > 0 ? (row.used / row.limit) * 100 : 0;
+      if (pct >= 75) {
+        return { word: 'blisko limitu', cls: 'warn' };
+      }
+      return { word: 'luz', cls: 'ok' };
+    }
+
+    function barColor(cls) {
+      return { ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)', info: 'var(--info)' }[cls] || 'var(--info)';
+    }
+
+    function limitRowHtml(name, about, row, generatedAt) {
+      const state = limitState(row);
+      const disabled = row.enabled === false || row.limit === 0;
+      const noOwnLimit = row.limit === null || row.limit === undefined;
+      const pct = (!disabled && !noOwnLimit && row.limit > 0)
+        ? Math.min(100, Math.round((row.used / row.limit) * 100))
+        : 0;
+      const usageText = disabled
+        ? 'Limit wyłączony w konfiguracji.'
+        : noOwnLimit
+          ? `${row.used} wysyłek w oknie (korzysta z limitu globalnego).`
+          : `${row.used} / ${row.limit} w bieżącym oknie.`;
+      const renewal = row.retryAfter
+        ? `<div class="muted-line">Odnowienie: ${escapeHtml(renewalLabel(row.retryAfter, generatedAt))}</div>`
+        : '';
+      return `
+        <div class="row-item">
+          <div class="row-head"><strong>${escapeHtml(name)}</strong><span class="pill ${state.cls}">${escapeHtml(state.word)}</span></div>
+          <div class="muted-line">${escapeHtml(about)}</div>
+          <div class="bar"><span style="width:${pct}%; background:${barColor(state.cls)}"></span></div>
+          <div class="muted-line">${escapeHtml(usageText)}</div>
+          ${renewal}
+        </div>
+      `;
+    }
+
+    function renderLimits(rateLimit, generatedAt) {
+      const rows = [];
+      rows.push(limitRowHtml('Globalny limit wysyłki', 'Ogranicza łączną liczbę wysyłek ze wszystkich klientów.', rateLimit.global || {}, generatedAt));
+      rows.push(limitRowHtml('Dzienny limit Gmaila', 'Dzienny pułap wysyłek przez kolejkę techniczną (Gmail SMTP).', rateLimit.provider?.gmail || {}, generatedAt));
+      (rateLimit.byClient || []).forEach((client) => {
+        rows.push(limitRowHtml(
+          `Limit wysyłki: ${client.sourceApp}`,
+          'Ogranicza, ile wiadomości ten klient może mieć wysłanych w oknie czasowym.',
+          client,
+          generatedAt
+        ));
+      });
+      (rateLimit.intake || []).forEach((client) => {
+        rows.push(limitRowHtml(
+          `Przyjmowanie zgłoszeń: ${client.sourceApp}`,
+          'Ogranicza, jak szybko klient może zgłaszać nowe wiadomości do wysłania (nie to samo, co limit wysyłki).',
+          client,
+          generatedAt
+        ));
+      });
+      els.limits.innerHTML = rows.join('') || '<div class="empty">Brak danych o limitach.</div>';
+    }
+
+    // --- Przeglad: kafle workerow ---------------------------------------------
+
+    function renderWorkerTiles(workers, generatedAt) {
+      els.tileStandard.innerHTML = workerTileHtml('standard', 'Worker standardowy', workers, generatedAt);
+      els.tileTechnical.innerHTML = workerTileHtml('technical', 'Worker techniczny', workers, generatedAt);
+    }
+
+    function workerTileHtml(queue, label, workers, generatedAt) {
+      const activity = (workers.lastActivity || {})[queue] || {};
+      const seconds = activity.secondsSinceLastSeen ?? null;
+      const heartbeatFresh = workers.heartbeatFreshSeconds || 0;
+      const staleCritical = workers.staleCriticalSeconds || 0;
+
+      let statusWord, cls;
+      if (seconds === null) {
+        statusWord = 'Nigdy się nie zgłosił';
+        cls = 'bad';
+      } else if (seconds <= heartbeatFresh) {
+        statusWord = 'Działa';
+        cls = 'ok';
+      } else if (seconds <= staleCritical) {
+        statusWord = `Milczy ${formatDuration(seconds)}, norma to ${formatDuration(heartbeatFresh)}`;
+        cls = 'warn';
+      } else {
+        statusWord = `Nie działa od ${formatDuration(seconds)}`;
+        cls = 'bad';
+      }
+
+      const active = (workers.active || [])
+        .filter((worker) => worker.queue === queue)
+        .sort((a, b) => String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || '')))[0] || null;
+
+      const countdownPct = activity.lastSeenAt && workers.cronIntervalSeconds
+        ? Math.max(0, Math.min(100, Math.round(((seconds ?? 0) / workers.cronIntervalSeconds) * 100)))
+        : 0;
+
+      return `
+        <div class="row-head"><h2>${escapeHtml(label)}</h2><span class="pill ${cls}">${escapeHtml(statusWord)}</span></div>
+        <div class="muted-line">Ostatnie uruchomienie: ${relTimeHtml(activity.lastSeenAt, generatedAt)}</div>
+        <div class="muted-line">Następne spodziewane: ${relFutureHtml(activity.nextExpectedAt, generatedAt)}</div>
+        <div class="bar"><span style="width:${countdownPct}%; background:${countdownPct >= 100 ? 'var(--warn)' : 'var(--info)'}"></span></div>
+        <div class="muted-line">Ostatnia wysyłka: ${relTimeHtml(activity.lastProcessedAt, generatedAt)}${active ? ` · ${active.processedCount} wysłanych łącznie` : ''}</div>
+        ${active && active.lastError ? `<div class="error">Ostatni błąd: ${escapeHtml(active.lastError)}</div>` : ''}
+        <details class="tech-details">
+          <summary>Szczegóły techniczne</summary>
+          <dl class="kv">
+            <dt>ID workera</dt><dd class="mono">${active ? escapeHtml(active.workerId) : '-'}</dd>
+            <dt>Host</dt><dd>${active ? escapeHtml(active.host || '-') : '-'}</dd>
+            <dt>PID</dt><dd>${active && active.processId !== null && active.processId !== undefined ? active.processId : '-'}</dd>
+            <dt>Uruchomiony</dt><dd>${active ? relTimeHtml(active.startedAt, generatedAt) : '-'}</dd>
+          </dl>
+        </details>
+      `;
+    }
+
+    // --- Przeglad: kolejka w liczbach -----------------------------------------
+
+    function renderQueueNumbers(data) {
+      const counts = data.statusCounts?.global || {};
       els.countPending.textContent = counts.pending || 0;
       els.countProcessing.textContent = counts.processing || 0;
       els.countRetry.textContent = counts.retry || 0;
       els.countSent.textContent = counts.sent || 0;
       els.countFailed.textContent = counts.failed || 0;
       els.countUnknown.textContent = counts.unknown || 0;
-      renderIssues(data.issues || [], data.generatedAt);
-      renderRateLimit(data.rateLimit?.global || {});
-      renderBacklog(data.backlog || {}, data.failures || {});
-      renderWorkers(data.workers || {}, data.generatedAt);
-      renderClients(data.statusCounts?.bySourceApp || []);
-      renderMailers(data.mailers || []);
+
+      const oldestAge = data.backlog?.oldestUnsentAgeSeconds;
+      els.headlineOldest.textContent = oldestAge === null || oldestAge === undefined ? 'brak' : formatDuration(oldestAge);
+
+      const sentLastHour = data.throughput?.sentLastHour ?? 0;
+      els.headlineSentHour.textContent = sentLastHour;
+
+      els.headlineDrain.textContent = drainEstimate(data);
     }
 
-    function renderIssues(issues, generatedAt) {
-      if (!issues.length) {
-        els.issues.innerHTML = '<div class="empty">Brak aktywnych problemow.</div>';
-        return;
+    function drainEstimate(data) {
+      const counts = data.statusCounts?.global || {};
+      const backlogCount = (counts.pending || 0) + (counts.retry || 0) + (counts.processing || 0);
+      if (backlogCount === 0) {
+        return 'Kolejka jest pusta.';
       }
-      els.issues.innerHTML = issues.map(issue => {
-        const cls = issue.severity === 'critical' ? 'bad' : issue.severity === 'warning' ? 'warn' : 'info';
-        const extra = issue.count !== undefined ? ` (${issue.count})` : issue.retryAfter ? ` do ${escapeHtml(issue.retryAfter)}` : '';
-        const workerInfo = issue.type === 'worker_missing'
-          ? `<div class="muted-line">Ostatni heartbeat: ${timestampWithAgo(issue.lastSeenAt, generatedAt) || 'brak danych'} | kolejne odpalenie: ${nextRunLabel(issue.nextExpectedAt, generatedAt) || '-'}</div>`
-          : '';
-        return `<div class="row-item"><div class="row-head"><strong>${escapeHtml(issue.title || issue.message)}${extra}</strong><span class="pill ${cls}">${escapeHtml(issue.label || severityLabel(issue.severity))}</span></div><div class="muted-line">${escapeHtml(issue.message || '')}</div>${workerInfo}</div>`;
-      }).join('');
+      const globalRate = data.rateLimit?.global || {};
+      if ((globalRate.remaining ?? null) === 0 && globalRate.retryAfter) {
+        return `Ruszy po odnowieniu limitu (${renewalLabel(globalRate.retryAfter, data.generatedAt)})`;
+      }
+      const sentLastHour = data.throughput?.sentLastHour ?? 0;
+      if (sentLastHour <= 0) {
+        return 'Nieznany (brak niedawnych wysyłek).';
+      }
+      const perSecond = sentLastHour / 3600;
+      const seconds = Math.round(backlogCount / perSecond);
+      return `~${formatDuration(seconds)}`;
     }
 
-    function renderRateLimit(rate) {
-      const used = Number(rate.used || 0);
-      const limit = Number(rate.limit || 0);
-      const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-      els.rateUsed.textContent = used;
-      els.rateLimit.textContent = limit || '-';
-      els.rateRemaining.textContent = rate.remaining ?? '-';
-      els.rateRetry.textContent = rate.retryAfter || '-';
-      els.rateBar.style.width = `${pct}%`;
-      els.rateBar.style.background = pct >= 95 ? 'var(--bad)' : pct >= 75 ? 'var(--warn)' : 'var(--ok)';
-    }
-
-    function renderBacklog(backlog, failures) {
-      const oldest = backlog.oldestUnsent;
-      const blocker = backlog.technicalBlocker;
-      const errorCodes = (failures.errorCodes || [])
-        .map(entry => `<span class="mono">${escapeHtml(entry.errorCode)}</span> (${entry.count})`)
-        .join(', ');
-      els.backlog.innerHTML = `
-        <dt>Najstarsza wiadomosc</dt><dd>${oldest ? `${escapeHtml(oldest.source_app || oldest.sourceApp || '-')}: <span class="mono">${escapeHtml(oldest.id)}</span>` : '-'}</dd>
-        <dt>Status</dt><dd>${oldest ? statusLabel(oldest.status) : '-'}</dd>
-        <dt>Najblizsza ponowna proba</dt><dd>${escapeHtml(backlog.nextDelayedAt || '-')}</dd>
-        <dt>Blokada techniczna FIFO</dt><dd>${blocker ? `<span class="mono">${escapeHtml(blocker.id)}</span>` : '-'}</dd>
-        <dt>Utkniete wysylanie</dt><dd>${backlog.staleProcessingCount || 0}</dd>
-        <dt>Bledy (24h)</dt><dd>${errorCodes || 'brak'}</dd>
-      `;
-    }
-
-    function renderWorkers(workers, generatedAt) {
-      const active = workers.active || [];
-      const lastActivity = workers.lastActivity || {};
-      const badges = `
-        <div class="row-item">
-          <div class="row-head">
-            <span>Worker standardowy</span><span class="pill ${workers.standardActive ? 'ok' : 'bad'}">${workers.standardActive ? 'aktywny' : 'brak heartbeat'}</span>
-          </div>
-          <div class="muted-line">${workerActivityLine(lastActivity.standard, generatedAt)}</div>
-          <div class="row-head">
-            <span>Worker techniczny</span><span class="pill ${workers.technicalActive ? 'ok' : 'bad'}">${workers.technicalActive ? 'aktywny' : 'brak heartbeat'}</span>
-          </div>
-          <div class="muted-line">${workerActivityLine(lastActivity.technical, generatedAt)}</div>
-          <div class="muted-line">Worker jest uznany za aktywny, jesli wyslal heartbeat w ostatnich ${workers.heartbeatFreshSeconds || '-'} sekundach. Worker startuje z crona co ok. ${workers.cronIntervalSeconds || '-'}s; alert Krytyczny pojawia sie dopiero po ${workers.staleCriticalSeconds || '-'}s bez heartbeat.</div>
-        </div>
-      `;
-      const rows = active.map(worker => `
-        <div class="row-item">
-          <div class="row-head"><strong>${queueLabel(worker.queue)}</strong><span class="mono">${escapeHtml(worker.workerId)}</span></div>
-          <dl class="kv">
-            <dt>Host</dt><dd>${escapeHtml(worker.host || '-')}</dd>
-            <dt>Proces</dt><dd>${worker.processId ?? '-'}</dd>
-            <dt>Uruchomiony</dt><dd>${escapeHtml(worker.startedAt || '-')}</dd>
-            <dt>Ostatni heartbeat</dt><dd>${escapeHtml(worker.lastSeenAt || '-')}</dd>
-            <dt>Ostatnio wyslal</dt><dd>${escapeHtml(worker.lastProcessedAt || 'brak wysylek')}</dd>
-            <dt>Liczba wysylek</dt><dd>${worker.processedCount ?? 0}</dd>
-          </dl>
-          ${worker.lastError ? `<div class="error">Ostatni blad: ${escapeHtml(worker.lastError)}</div>` : ''}
-        </div>
-      `).join('');
-      els.workers.innerHTML = badges + (rows || '<div class="empty">Brak aktywnych heartbeatow.</div>');
-    }
-
-    function workerActivityLine(activity, generatedAt) {
-      const lastRun = timestampWithAgo(activity?.lastSeenAt, generatedAt);
-      const lastSent = timestampWithAgo(activity?.lastProcessedAt, generatedAt);
-      const nextRun = nextRunLabel(activity?.nextExpectedAt, generatedAt);
-      return `Ostatni przebieg: ${lastRun || 'brak danych'} | ostatnia wysylka: ${lastSent || 'brak'} | kolejne odpalenie: ${nextRun || '-'}`;
-    }
-
-    function timestampWithAgo(value, reference) {
-      if (!value) return null;
-      const ago = agoLabel(value, reference);
-      return `${escapeHtml(value)}${ago ? ` (${ago})` : ''}`;
-    }
-
-    function latestTimestamp(a, b) {
-      if (!a) return b || null;
-      if (!b) return a;
-      return a >= b ? a : b;
-    }
-
-    function agoLabel(value, reference) {
-      const ts = Date.parse(String(value).replace(' ', 'T'));
-      const ref = reference ? Date.parse(String(reference).replace(' ', 'T')) : Date.now();
-      if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
-      const seconds = Math.max(0, Math.round((ref - ts) / 1000));
-      return `${formatDuration(seconds)} temu`;
-    }
-
-    function nextRunLabel(value, reference) {
-      if (!value) return null;
-      const ts = Date.parse(String(value).replace(' ', 'T'));
-      const ref = reference ? Date.parse(String(reference).replace(' ', 'T')) : Date.now();
-      if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
-      const diffSeconds = Math.round((ts - ref) / 1000);
-      return diffSeconds >= 0 ? `za ${formatDuration(diffSeconds)}` : `spozniony o ${formatDuration(-diffSeconds)}`;
-    }
+    // --- Przeglad: pozostale panele -------------------------------------------
 
     function renderClients(clients) {
       if (!clients.length) {
-        els.clients.innerHTML = '<div class="empty">Brak aktywnych klientow.</div>';
+        els.clients.innerHTML = '<div class="empty">Brak aktywnych klientów.</div>';
         return;
       }
       els.clients.innerHTML = clients.map(client => {
         const c = client.statusCounts || {};
-        return `<div class="row-item"><strong>${escapeHtml(client.sourceApp)}</strong><div class="muted-line">oczekuja ${c.pending || 0} | wysylane ${c.processing || 0} | ponowia probe ${c.retry || 0} | wyslane ${c.sent || 0} | nieudane ${c.failed || 0}</div></div>`;
+        return `<div class="row-item"><strong>${escapeHtml(client.sourceApp)}</strong><div class="muted-line">oczekują ${c.pending || 0} | wysyłane ${c.processing || 0} | ponowią próbę ${c.retry || 0} | wysłane ${c.sent || 0} | nieudane ${c.failed || 0}</div></div>`;
       }).join('');
+    }
+
+    function renderTechHealth(health) {
+      const status = health.status || 'unknown';
+      els.techHealth.innerHTML = `
+        <dt>Status ogólny</dt><dd><span class="pill ${status === 'ok' ? 'ok' : 'bad'}">${status === 'ok' ? 'sprawny' : 'wymaga uwagi'}</span></dd>
+        <dt>Baza danych</dt><dd>${checkLabel(health.checks?.database)}</dd>
+        <dt>Załączniki</dt><dd>${checkLabel(health.checks?.attachments)}</dd>
+        <dt>Workery</dt><dd>${checkLabel(health.checks?.workers)}</dd>
+      `;
+      els.apiVersion.textContent = health.apiVersion ? `Wersja API ${health.apiVersion}` : '';
     }
 
     function renderMailers(mailers) {
       if (!mailers.length) {
-        els.mailers.innerHTML = '<div class="empty">Brak danych o konfiguracji mailerow.</div>';
+        els.mailers.innerHTML = '<div class="empty">Brak danych o konfiguracji mailerów.</div>';
         return;
       }
       els.mailers.innerHTML = mailers.map(mailer => `
         <div class="row-item">
           <div class="row-head"><strong>${escapeHtml(mailer.name || queueLabel(mailer.queue))}</strong><span class="pill info">${queueLabel(mailer.queue)}</span></div>
           <dl class="kv">
-            <dt>Typ wiadomosci</dt><dd>${(mailer.messageTypes || []).map(escapeHtml).join(', ') || '-'}</dd>
+            <dt>Typ wiadomości</dt><dd>${(mailer.messageTypes || []).map(escapeHtml).join(', ') || '-'}</dd>
             <dt>Dostawca</dt><dd>${escapeHtml(mailer.provider || '-')}</dd>
             <dt>Serwer</dt><dd>${escapeHtml(mailer.host || '-')}</dd>
             <dt>Port</dt><dd>${mailer.port ?? '-'}</dd>
@@ -1125,7 +1391,7 @@
             <dt>Login SMTP</dt><dd>${escapeHtml(mailer.username || '-')}</dd>
             <dt>Nadawca</dt><dd>${escapeHtml(mailer.fromEmail || '-')}</dd>
             <dt>Limit czasu</dt><dd>${mailer.timeoutSeconds ?? '-'} s</dd>
-            ${mailer.fallbackToStandard !== undefined ? `<dt>Awaryjny powrot</dt><dd>${mailer.fallbackToStandard ? 'po nieudanych probach wraca do kolejki standardowej' : 'wylaczony'}</dd>` : ''}
+            ${mailer.fallbackToStandard !== undefined ? `<dt>Awaryjny powrót</dt><dd>${mailer.fallbackToStandard ? 'po nieudanych próbach wraca do kolejki standardowej' : 'wyłączony'}</dd>` : ''}
           </dl>
         </div>
       `).join('');
@@ -1142,9 +1408,9 @@
     }
 
     function setMainTab(tab) {
-      const tabs = { queue: els.tabQueue, sent: els.tabSent, stats: els.tabStats, config: els.tabConfig };
-      const navs = { queue: els.navQueue, sent: els.navSent, stats: els.navStats, config: els.navConfig };
-      if (!tabs[tab]) tab = 'queue';
+      const tabs = { overview: els.tabOverview, queue: els.tabQueue, sent: els.tabSent, config: els.tabConfig };
+      const navs = { overview: els.navOverview, queue: els.navQueue, sent: els.navSent, config: els.navConfig };
+      if (!tabs[tab]) tab = 'overview';
       Object.keys(tabs).forEach(key => {
         tabs[key].classList.toggle('hidden', key !== tab);
         navs[key].classList.toggle('active', key === tab);
@@ -1223,7 +1489,7 @@
         return [email.id, email.to, email.subject].some(value => String(value || '').toLowerCase().includes(search));
       });
       const rows = applySort(filtered, unsentSort, unsentSortKeys);
-      els.unsentCount.textContent = `${rows.length} rekordow`;
+      els.unsentCount.textContent = `${rows.length} rekordów`;
       els.emptyUnsent.classList.toggle('hidden', rows.length !== 0);
       els.unsentRows.innerHTML = rows.map(email => `
         <tr>
@@ -1233,9 +1499,9 @@
           <td data-label="Odbiorca">${escapeHtml(email.to || '-')}</td>
           <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
           <td data-label="Pochodzenie">${originCell(email)}</td>
-          <td data-label="Wiek">${formatDuration(email.queueAgeSeconds)}</td>
-          <td data-label="Powod oczekiwania">${delayLabel(email.delayReason)}${email.delayUntil ? `<div class="muted-line">${escapeHtml(email.delayUntil)}</div>` : ''}</td>
-          <td data-label="Ostatni blad">${escapeHtml(email.lastError || '-')}${email.status === 'unknown' ? `<div><button type="button" class="requeue-btn" data-email-id="${escapeHtml(email.id)}">Ponow wysylke</button></div>` : ''}</td>
+          <td data-label="Wiek" title="${escapeHtml(email.createdAt || '')}">${formatDuration(email.queueAgeSeconds)}</td>
+          <td data-label="Powód oczekiwania">${delayCellHtml(email)}</td>
+          <td data-label="Ostatni błąd">${escapeHtml(email.lastError || '-')}${email.status === 'unknown' ? `<div><button type="button" class="requeue-btn" data-email-id="${escapeHtml(email.id)}">Ponów wysyłkę</button></div>` : ''}</td>
         </tr>
       `).join('');
     }
@@ -1244,34 +1510,16 @@
       const button = event.target.closest('.requeue-btn');
       if (!button) return;
       const emailId = button.dataset.emailId;
-      if (!confirm(`Wiadomosc ${emailId} mogla zostac dostarczona. Sprawdz logi i skrzynke nadawcy przed ponowieniem. Kontynuowac?`)) return;
+      if (!confirm(`Wiadomość ${emailId} mogła zostać dostarczona. Sprawdź logi i skrzynkę nadawcy przed ponowieniem. Kontynuować?`)) return;
       button.disabled = true;
       try {
         await apiPost(`/admin/emails/${encodeURIComponent(emailId)}/requeue`);
         await refreshAll();
       } catch (error) {
-        showError(error.message || 'Nie udalo sie ponowic wysylki.');
+        showError(error.message || 'Nie udało się ponowić wysyłki.');
         button.disabled = false;
       }
     });
-
-    async function apiPost(path, body) {
-      const response = await fetch(path, {
-        method: 'POST',
-        headers: {
-          'X-Admin-Key': adminKey,
-          'Accept': 'application/json',
-          ...(body ? { 'Content-Type': 'application/json' } : {})
-        },
-        body: body ? JSON.stringify(body) : undefined
-      });
-      const text = await response.text();
-      const payload = text ? JSON.parse(text) : {};
-      if (!response.ok) {
-        throw new Error(errorLabel(payload.message || payload.error, response.status));
-      }
-      return payload;
-    }
 
     function renderSent() {
       const source = els.sentSourceFilter.value;
@@ -1284,7 +1532,7 @@
         return [email.id, email.to, email.subject, email.providerMessageId].some(value => String(value || '').toLowerCase().includes(search));
       });
       const rows = applySort(filtered, sentSort, sentSortKeys);
-      els.sentCount.textContent = `${rows.length} rekordow`;
+      els.sentCount.textContent = `${rows.length} rekordów`;
       els.emptySent.classList.toggle('hidden', rows.length !== 0);
       els.sentRows.innerHTML = rows.map(email => `
         <tr>
@@ -1294,7 +1542,7 @@
           <td data-label="Odbiorca">${escapeHtml(email.to || '-')}</td>
           <td data-label="Temat"><div>${escapeHtml(email.subject || '-')}</div><div class="muted-line mono">${escapeHtml(email.id)}</div></td>
           <td data-label="Pochodzenie">${originCell(email)}</td>
-          <td data-label="Wyslano">${escapeHtml(email.sentAt || '-')}</td>
+          <td data-label="Wysłano">${relTimeHtml(email.sentAt, lastGeneratedAt)}</td>
           <td data-label="ID dostawcy" class="mono">${escapeHtml(email.providerMessageId || '-')}</td>
         </tr>
       `).join('');
@@ -1316,9 +1564,9 @@
     function statusLabel(status) {
       return {
         pending: 'oczekuje',
-        processing: 'wysylanie',
-        retry: 'ponowna proba',
-        sent: 'wyslane',
+        processing: 'wysyłanie',
+        retry: 'ponowna próba',
+        sent: 'wysłane',
         failed: 'nieudane',
         unknown: 'nieznany wynik'
       }[status] || escapeHtml(status || '-');
@@ -1339,39 +1587,40 @@
       }[queue] || escapeHtml(queue || '-');
     }
 
-    function delayLabel(reason) {
-      return {
-        rate_limited: 'limit wysylki',
-        retry_backoff: 'czeka na ponowna probe',
-        scheduled: 'zaplanowana wysylka',
-        processing: 'aktualnie wysylana',
-        stale_processing: 'utknela w wysylaniu',
-        awaiting_worker: 'czeka na workera',
-        retry_due: 'gotowa do ponownej proby'
-      }[reason] || '-';
-    }
-
-    function severityLabel(severity) {
-      return {
-        critical: 'Krytyczny',
-        warning: 'Ostrzezenie',
-        info: 'Informacja'
-      }[severity] || 'Informacja';
+    // Full sentences instead of the old one-word labels; for reasons with a known
+    // future timestamp (delayUntil), the relative "ruszy za 6 min" replaces the
+    // raw timestamp, per the panel's rule of always pairing relative time with
+    // the exact timestamp in a title attribute.
+    function delayCellHtml(email) {
+      const reason = email.delayReason;
+      const sentence = {
+        rate_limited: 'Czeka na wolne miejsce w limicie wysyłki',
+        retry_backoff: 'Czeka na ponowną próbę',
+        scheduled: 'Zaplanowana wysyłka',
+        processing: 'Aktualnie wysyłana',
+        stale_processing: 'Utknęła w wysyłaniu - worker ją zwolni',
+        awaiting_worker: 'Czeka, aż podejmie ją worker',
+        retry_due: 'Gotowa do ponownej próby przy najbliższym przebiegu workera'
+      }[reason];
+      if (!sentence) return '-';
+      const showsCountdown = (reason === 'rate_limited' || reason === 'retry_backoff' || reason === 'scheduled') && email.delayUntil;
+      const countdown = showsCountdown ? `<div class="muted-line">${relFutureHtml(email.delayUntil, lastGeneratedAt)}</div>` : '';
+      return `${escapeHtml(sentence)}${countdown}`;
     }
 
     function checkLabel(value) {
       return {
-        ok: 'dziala',
+        ok: 'działa',
         writable: 'zapisywalne',
         degraded: 'wymaga uwagi',
-        error: 'blad'
+        error: 'błąd'
       }[value] || '-';
     }
 
     function errorLabel(message, status) {
-      if (message === 'Invalid or missing admin key') return 'Nieprawidlowy albo brakujacy klucz administratora.';
+      if (message === 'Invalid or missing admin key') return 'Nieprawidłowy albo brakujący klucz administratora.';
       if (message === 'Admin API key is not configured') return 'Klucz administratora nie jest skonfigurowany na serwerze.';
-      return message || `Blad polaczenia z serwerem (${status})`;
+      return message || `Błąd połączenia z serwerem (${status})`;
     }
 
     function formatDuration(seconds) {
@@ -1385,9 +1634,55 @@
       return `${Math.floor(h / 24)}d ${h % 24}h`;
     }
 
+    function latestTimestamp(a, b) {
+      if (!a) return b || null;
+      if (!b) return a;
+      return a >= b ? a : b;
+    }
+
+    function agoLabel(value, reference) {
+      const ts = Date.parse(String(value).replace(' ', 'T'));
+      const ref = reference ? Date.parse(String(reference).replace(' ', 'T')) : Date.now();
+      if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
+      const seconds = Math.max(0, Math.round((ref - ts) / 1000));
+      return `${formatDuration(seconds)} temu`;
+    }
+
+    function nextRunLabel(value, reference) {
+      if (!value) return null;
+      const ts = Date.parse(String(value).replace(' ', 'T'));
+      const ref = reference ? Date.parse(String(reference).replace(' ', 'T')) : Date.now();
+      if (Number.isNaN(ts) || Number.isNaN(ref)) return null;
+      const diffSeconds = Math.round((ts - ref) / 1000);
+      return diffSeconds >= 0 ? `za ${formatDuration(diffSeconds)}` : `spóźniony o ${formatDuration(-diffSeconds)}`;
+    }
+
+    // Renders "o HH:MM, za 6m" for a renewal timestamp - the clock time plus a
+    // relative countdown, so the reader doesn't have to do date arithmetic.
+    function renewalLabel(value, reference) {
+      if (!value) return '-';
+      const time = String(value).slice(11, 16);
+      const next = nextRunLabel(value, reference);
+      return time ? `o ${time}${next ? `, ${next}` : ''}` : (next || '-');
+    }
+
+    // Every timestamp in the panel renders as relative text with the exact
+    // value kept in a title attribute, per the panel's date convention.
+    function relTimeHtml(value, reference) {
+      if (!value) return '<span>brak danych</span>';
+      const ago = agoLabel(value, reference);
+      return `<span title="${escapeHtml(value)}">${ago ? escapeHtml(ago) : escapeHtml(value)}</span>`;
+    }
+
+    function relFutureHtml(value, reference) {
+      if (!value) return '<span>-</span>';
+      const next = nextRunLabel(value, reference);
+      return `<span title="${escapeHtml(value)}">${next ? escapeHtml(next) : escapeHtml(value)}</span>`;
+    }
+
     function setBusy(isBusy) {
       els.refreshBtn.disabled = isBusy;
-      els.refreshBtn.textContent = isBusy ? 'Odswiezam...' : 'Odswiez';
+      els.refreshBtn.textContent = isBusy ? 'Odświeżam...' : 'Odśwież';
     }
 
     function showError(message) {

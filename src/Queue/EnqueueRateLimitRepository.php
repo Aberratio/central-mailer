@@ -60,6 +60,47 @@ final class EnqueueRateLimitRepository
         }
     }
 
+    /**
+     * Read-only counterpart to tryReserve(): usage for a source app in the current window,
+     * same shape as RateLimitRepository::scopeUsage().
+     *
+     * @return array{used: int, limit: int, remaining: int, retryAfter: string|null}
+     */
+    public function usage(string $sourceApp, int $limit, string $since, int $windowMinutes): array
+    {
+        $countStmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM email_enqueue_rate_limit_reservations
+             WHERE source_app = :source_app AND reserved_at >= :since'
+        );
+        $countStmt->execute(['source_app' => $sourceApp, 'since' => $since]);
+        $used = (int) $countStmt->fetchColumn();
+
+        return [
+            'used' => $used,
+            'limit' => $limit,
+            'remaining' => max(0, $limit - $used),
+            'retryAfter' => $used >= $limit
+                ? $this->retryAfterForWindow($sourceApp, $since, $windowMinutes)
+                : null,
+        ];
+    }
+
+    private function retryAfterForWindow(string $sourceApp, string $since, int $windowMinutes): string
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT MIN(reserved_at) FROM email_enqueue_rate_limit_reservations
+             WHERE source_app = :source_app AND reserved_at >= :since'
+        );
+        $stmt->execute(['source_app' => $sourceApp, 'since' => $since]);
+        $oldest = $stmt->fetchColumn();
+        $from = is_string($oldest) && $oldest !== '' ? $oldest : self::now();
+
+        return (new \DateTimeImmutable($from))
+            ->modify(sprintf('+%d minutes', max(1, $windowMinutes)))
+            ->modify('+1 second')
+            ->format('Y-m-d H:i:s');
+    }
+
     private static function now(): string
     {
         return (new \DateTimeImmutable())->format('Y-m-d H:i:s');
