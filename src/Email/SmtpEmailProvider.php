@@ -166,10 +166,12 @@ final class SmtpEmailProvider implements EmailProviderInterface
             throw new \RuntimeException('Unable to read inline attachment');
         }
 
+        // The filename is required: Gmail refuses to render a cid: image whose part carries
+        // no name/filename and falls back to showing a broken image plus a nameless attachment.
         $mail->addStringEmbeddedImage(
             $content,
             $attachment->contentId,
-            '',
+            $attachment->filename,
             PHPMailer::ENCODING_BASE64,
             $attachment->contentType,
             'inline'

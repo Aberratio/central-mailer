@@ -80,7 +80,7 @@ final class SmtpEmailProviderTest extends TestCase
         (new ReflectionMethod($provider, 'mailer'))->invoke($provider);
     }
 
-    public function testInlineAttachmentIsEmbeddedWithoutFilenameHeader(): void
+    public function testInlineAttachmentKeepsItsFilenameSoGmailRendersTheCidImage(): void
     {
         $provider = new SmtpEmailProvider(new Env([
             'SMTP_MESSAGE_ID_DOMAIN' => 'mailer.example.test',
@@ -119,8 +119,7 @@ final class SmtpEmailProviderTest extends TestCase
         }
 
         self::assertStringContainsString('Content-ID: <qr-inline>', $mailer->sentMime);
-        self::assertStringContainsString('Content-Disposition: inline', $mailer->sentMime);
-        self::assertStringNotContainsString('kod-qr-inline.png', $mailer->sentMime);
+        self::assertStringContainsString('Content-Disposition: inline; filename=kod-qr-inline.png', $mailer->sentMime);
         self::assertStringContainsString('kod-qr.png', $mailer->sentMime);
         self::assertStringContainsString('Content-Disposition: attachment;', $mailer->sentMime);
     }
