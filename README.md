@@ -149,3 +149,4 @@ Run the test suite with Composer's configured test script (see `composer.json`).
 - Nothing sending: confirm the worker is running and check for rows stuck in `retry` with a future `next_attempt_at`.
 - Rate limit blocking sends: check global/client limits and `email_rate_limit_reservations`.
 - SMTP errors: verify host, port, `SMTP_SECURE`, login, and password.
+- `SQLSTATE[22003]` on `queue_credit + queue_weight`, worker exiting 255 and the queue stuck `pending`: the database predates migration `012`, where `queue_weight` was still `INT UNSIGNED` and promoted the fair-share arithmetic to `BIGINT UNSIGNED` once `queue_credit` went negative. Run the migrations.
