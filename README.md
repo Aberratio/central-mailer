@@ -704,3 +704,4 @@ The rest of the application does not require changes because `EmailWorker` depen
 - Rate limit blocks sending: check the global `.env` limit, the client limit in `email_clients`, and recent rows in `email_rate_limit_reservations`.
 - SMTP error: check host, port, `SMTP_SECURE`, full email login, and mailbox password.
 - JSON migration issue in older MariaDB versions: make sure the database version supports the `JSON` type, or change the `metadata JSON NULL` column to `metadata LONGTEXT NULL`.
+- `SQLSTATE[22003] ... queue_credit + queue_weight` on every worker run (worker exits with code 255, `POST /emails/worker/run` returns 500, queue stays `pending`): the database predates migration `011` and still has `queue_weight INT UNSIGNED`, which promotes the fair-share arithmetic to `BIGINT UNSIGNED` once `queue_credit` goes negative. Run the migrations; `011` makes the column signed and resets negative credits.

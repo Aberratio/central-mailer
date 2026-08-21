@@ -1404,6 +1404,9 @@ final class EmailQueueRepository
 
     private function addQueueCredits(): void
     {
+        // queue_weight must stay a signed column (migration 011): an UNSIGNED weight promotes
+        // this addition to BIGINT UNSIGNED and a negative queue_credit then aborts every claim
+        // with SQLSTATE[22003].
         $this->pdo->exec(
             'UPDATE email_clients
              SET queue_credit = CASE
@@ -1478,9 +1481,15 @@ final class EmailQueueRepository
             'SELECT COALESCE(SUM(queue_weight), 1) FROM email_clients WHERE active = 1'
         )->fetchColumn();
         $counts = array_count_values(array_column($claimed, 'source_app'));
+        // queue_credit is a signed deficit counter: a client that outruns the queue stays
+        // negative until the others go idle. Floor it so a long-running installation cannot
+        // drift towards the BIGINT limit, mirroring the ceiling in addQueueCredits().
         $stmt = $this->pdo->prepare(
             'UPDATE email_clients
-             SET queue_credit = queue_credit - :spent
+             SET queue_credit = CASE
+                 WHEN queue_credit - :spent < -1000000000 THEN -1000000000
+                 ELSE queue_credit - :spent
+             END
              WHERE source_app = :source_app'
         );
         foreach ($counts as $sourceApp => $count) {
