@@ -166,7 +166,12 @@ final class EmailQueueRepository
                     ? null
                     : json_encode($recipient['metadata'], JSON_THROW_ON_ERROR);
                 $suppressed = in_array(mb_strtolower((string) $recipient['to']), $suppressedRecipients, true);
-                $status = $suppressed ? 'failed' : 'pending';
+                // Odbiorca odrzucony przez walidacje adresu ladu je jako terminalny 'failed',
+                // tak samo jak zablokowany — zamiast wywracac cala paczke bledem 422.
+                $invalidReason = isset($recipient['invalidReason']) && is_string($recipient['invalidReason'])
+                    ? $recipient['invalidReason']
+                    : null;
+                $status = ($suppressed || $invalidReason !== null) ? 'failed' : 'pending';
                 $queueStmt->execute([
                     'id' => $emailId,
                     'source_app' => $data['sourceApp'],
@@ -184,13 +189,15 @@ final class EmailQueueRepository
                     'metadata' => $recipientMetadata,
                     'status' => $status,
                     'max_attempts' => $data['maxAttempts'] ?? 5,
-                    'last_error' => $suppressed ? 'Recipient address is suppressed' : null,
+                    'last_error' => $suppressed ? 'Recipient address is suppressed' : $invalidReason,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
                 $this->insertAttachments($emailId, $recipient['attachments'] ?? [], $now);
                 if ($suppressed) {
                     $this->insertEvent($emailId, 'suppressed', 'failed', 0, 'suppressed', 'Recipient address is suppressed', null, ['batchId' => $batchId], $now);
+                } elseif ($invalidReason !== null) {
+                    $this->insertEvent($emailId, 'rejected', 'failed', 0, 'invalid_recipient', $invalidReason, null, ['batchId' => $batchId], $now);
                 } else {
                     $this->insertEvent($emailId, 'queued', 'pending', 0, null, null, null, ['batchId' => $batchId], $now);
                 }

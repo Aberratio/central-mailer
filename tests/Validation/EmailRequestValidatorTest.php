@@ -309,6 +309,184 @@ final class EmailRequestValidatorTest extends TestCase
         self::assertSame('evt-1', $result['contextId']);
     }
 
+    public function testBatchSurvivesOneInvalidRecipientInsteadOfBeingRejected(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                ['to' => 'ok1@deliverable.test'],
+                ['to' => 'literowka@@gmial'],
+                ['to' => 'ok2@deliverable.test'],
+            ],
+        ]);
+
+        self::assertCount(3, $result['recipients']);
+        self::assertNull($result['recipients'][0]['invalidReason']);
+        self::assertSame('Recipient email is invalid', $result['recipients'][1]['invalidReason']);
+        self::assertNull($result['recipients'][2]['invalidReason']);
+        self::assertSame('ok1@deliverable.test', $result['recipients'][0]['to']);
+        self::assertSame('ok2@deliverable.test', $result['recipients'][2]['to']);
+    }
+
+    public function testBatchSurvivesInvalidRecipientAtIndexZero(): void
+    {
+        // Regresja: wspolna czesc payloadu walidowala adres odbiorcy nr 0 i wywracala
+        // cala paczke, zanim petla po odbiorcach w ogole ruszyla.
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                ['to' => 'nie-adres'],
+                ['to' => 'ok@deliverable.test'],
+            ],
+        ]);
+
+        self::assertSame('Recipient email is invalid', $result['recipients'][0]['invalidReason']);
+        self::assertNull($result['recipients'][1]['invalidReason']);
+        self::assertSame('ok@deliverable.test', $result['recipients'][1]['to']);
+    }
+
+    public function testBatchMarksNonDeliverableDomainAsInvalidWithoutRejectingBatch(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                ['to' => 'ktos@example.com'],
+                ['to' => 'ok@deliverable.test'],
+            ],
+        ]);
+
+        self::assertSame('Recipient email domain cannot receive email', $result['recipients'][0]['invalidReason']);
+        self::assertNull($result['recipients'][1]['invalidReason']);
+    }
+
+    public function testBatchMarksDomainWithoutMailServerAsInvalidWithoutRejectingBatch(): void
+    {
+        DnsStub::$mxRecords = [];
+        DnsStub::$hasARecord = false;
+        DnsStub::$hasAaaaRecord = false;
+        $validator = new EmailRequestValidator(new Env([]));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [['to' => 'ktos@bez-mx.test']],
+        ]);
+
+        self::assertSame('Recipient email domain has no mail server', $result['recipients'][0]['invalidReason']);
+    }
+
+    public function testBatchWithEveryRecipientInvalidIsStillAcceptedSoCallerSeesWhy(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [['to' => 'zly'], ['to' => 'tez-zly']],
+        ]);
+
+        self::assertCount(2, $result['recipients']);
+        self::assertNotNull($result['recipients'][0]['invalidReason']);
+        self::assertNotNull($result['recipients'][1]['invalidReason']);
+    }
+
+    public function testInvalidRecipientKeepsReadableLabelForMissingOrNonStringAddress(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [['to' => '   '], ['to' => 12345], ['to' => null]],
+        ]);
+
+        self::assertSame('(brak adresu)', $result['recipients'][0]['to']);
+        self::assertSame('(brak adresu)', $result['recipients'][1]['to']);
+        self::assertSame('(brak adresu)', $result['recipients'][2]['to']);
+        self::assertSame('to is required', $result['recipients'][0]['invalidReason']);
+    }
+
+    public function testInvalidRecipientLabelFitsTheRecipientEmailColumn(): void
+    {
+        // recipient_email to VARCHAR(255) NOT NULL - dluga sieczka z importu nie moze
+        // wywrocic INSERT-a calej paczki.
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [['to' => str_repeat('z', 400)]],
+        ]);
+
+        self::assertSame(255, mb_strlen($result['recipients'][0]['to']));
+        self::assertNotNull($result['recipients'][0]['invalidReason']);
+    }
+
+    public function testInvalidRecipientDropsItsAttachmentsSoNothingIsWrittenToDisk(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $result = $validator->validateBatchPayload([
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                [
+                    'to' => 'zly-adres',
+                    'attachments' => [[
+                        'filename' => 'kod-qr.png',
+                        'contentBase64' => self::tinyPngBase64(),
+                        'contentType' => 'image/png',
+                    ]],
+                ],
+                [
+                    'to' => 'ok@deliverable.test',
+                    'attachments' => [[
+                        'filename' => 'kod-qr.png',
+                        'contentBase64' => self::tinyPngBase64(),
+                        'contentType' => 'image/png',
+                    ]],
+                ],
+            ],
+        ]);
+
+        self::assertSame([], $result['recipients'][0]['attachments']);
+        self::assertCount(1, $result['recipients'][1]['attachments']);
+    }
+
+    public function testSingleSendStillRejectsAnInvalidRecipient(): void
+    {
+        // Pojedyncza wysylka nie ma dokad zdegradowac bledu - musi dalej zwracac 422.
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Recipient email is invalid');
+
+        $validator->validateQueuePayload($this->payload('nie-adres'));
+    }
+
+    public function testBatchStillRejectsPayloadLevelProblems(): void
+    {
+        // Luzniejsza walidacja adresow nie moze przepuszczac zepsutego payloadu paczki.
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('subject is required');
+
+        $validator->validateBatchPayload([
+            'html' => '<p>QR</p>',
+            'recipients' => [['to' => 'ok@deliverable.test']],
+        ]);
+    }
+
     private function payload(string $to): array
     {
         return [
