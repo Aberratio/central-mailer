@@ -25,10 +25,17 @@ final class EmailRequestValidator
     {
     }
 
-    /** @param array<string, mixed> $payload */
-    public function validateQueuePayload(array $payload, string $defaultCategory = 'transactional'): array
-    {
-        $to = $this->email($payload['to'] ?? null);
+    /**
+     * @param array<string, mixed> $payload
+     * @param bool $validateRecipient batch waliduje adresy osobno, per odbiorca — tam wspolna
+     *                                czesc payloadu nie moze przewracac sie na adresie odbiorcy nr 0
+     */
+    public function validateQueuePayload(
+        array $payload,
+        string $defaultCategory = 'transactional',
+        bool $validateRecipient = true
+    ): array {
+        $to = $validateRecipient ? $this->email($payload['to'] ?? null) : null;
         $subject = $this->requiredString($payload['subject'] ?? null, 'subject');
         $html = $this->requiredString($payload['html'] ?? null, 'html');
         $text = $this->optionalString($payload['text'] ?? null, 'text');
@@ -104,7 +111,7 @@ final class EmailRequestValidator
             'contextId' => $payload['contextId'] ?? null,
             'metadata' => $payload['metadata'] ?? null,
             'attachments' => $payload['attachments'] ?? [],
-        ], $defaultBatchCategory);
+        ], $defaultBatchCategory, false);
         unset($common['to'], $common['attachments']);
         $commonAttachments = $this->attachments($payload['attachments'] ?? []);
 
@@ -145,13 +152,29 @@ final class EmailRequestValidator
                 throw new \InvalidArgumentException(sprintf('Recipient attachments at index %d exceed the %d byte limit', $index, $maxBytes));
             }
 
+            // Jeden bledny adres nie moze przepasc calej paczki. Przy wysylce masowej (setki
+            // adresow z importu CSV) literowka w domenie jest pewnikiem, a odrzucenie batcha
+            // 422 oznaczalo, ze nikt z tej paczki nie dostaje maila. Nieprawidlowego odbiorce
+            // zapisujemy wiec jako 'failed' — dokladnie jak adres z listy zablokowanych —
+            // zeby wolajacy zobaczyl go w statusie paczki i mogl poprawic dane.
+            $invalidReason = null;
+            try {
+                $to = $this->email($recipient['to'] ?? null);
+            } catch (\InvalidArgumentException $exception) {
+                $invalidReason = $exception->getMessage();
+                $to = $this->invalidRecipientLabel($recipient['to'] ?? null);
+            }
+
             $validatedRecipients[] = [
-                'to' => $this->email($recipient['to'] ?? null),
+                'to' => $to,
+                'invalidReason' => $invalidReason,
                 'metadata' => $metadata,
                 'subject' => $subject,
                 'html' => $html,
                 'text' => $text,
-                'attachments' => $recipientAttachments,
+                // Dla odrzuconego odbiorcy nie ma po co zapisywac zalacznikow na dysk —
+                // rekord i tak powstaje od razu jako terminalny.
+                'attachments' => $invalidReason === null ? $recipientAttachments : [],
             ];
         }
 
@@ -213,6 +236,19 @@ final class EmailRequestValidator
         $this->validateRecipientDomain($email);
 
         return $email;
+    }
+
+    /**
+     * Etykieta odrzuconego adresu zapisywana w recipient_email (VARCHAR(255) NOT NULL), zeby
+     * operator zobaczyl w statusie paczki, ktory wiersz importu wymaga poprawki.
+     */
+    private function invalidRecipientLabel(mixed $value): string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return '(brak adresu)';
+        }
+
+        return mb_substr(trim($value), 0, 255);
     }
 
     private function validateRecipientDomain(string $email): void

@@ -100,8 +100,14 @@ final class EmailQueueService
         $storedEmailIds = [];
         foreach ($validated['recipients'] as $index => $recipient) {
             $emailId = Uuid::v4();
-            $recipientAttachments = array_merge($validated['attachments'], $recipient['attachments']);
             $validated['recipients'][$index]['id'] = $emailId;
+            // Odbiorca odrzucony przez walidacje adresu powstaje od razu jako 'failed' — nie ma
+            // po co zapisywac jego zalacznikow na dysk.
+            if (($recipient['invalidReason'] ?? null) !== null) {
+                $validated['recipients'][$index]['attachments'] = [];
+                continue;
+            }
+            $recipientAttachments = array_merge($validated['attachments'], $recipient['attachments']);
             $validated['recipients'][$index]['attachments'] = $this->attachmentStorage->store($emailId, $recipientAttachments);
             $storedEmailIds[] = $emailId;
         }

@@ -75,4 +75,113 @@ final class EmailQueueServiceTest extends DatabaseTestCase
         sort($statuses);
         self::assertSame(['failed', 'pending'], $statuses);
     }
+
+    public function testBatchQueuesValidRecipientsEvenWhenOneAddressIsInvalid(): void
+    {
+        // Sedno poprawki: przy 1600 adresach z importu literowka jest pewnikiem, a wczesniej
+        // odrzucala cala paczke bledem 422 - nikt z niej nie dostawal maila.
+        $result = $this->service->enqueueBatch('app-a', [
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                ['to' => 'ok1@deliverable.test'],
+                ['to' => 'literowka@@gmial'],
+                ['to' => 'ok2@deliverable.test'],
+            ],
+        ]);
+
+        self::assertCount(3, $result->emails);
+        self::assertSame('pending', $result->emails[0]['status']);
+        self::assertSame('failed', $result->emails[1]['status']);
+        self::assertSame('pending', $result->emails[2]['status']);
+
+        $rows = $this->pdo->query(
+            'SELECT recipient_email, status, last_error FROM email_queue ORDER BY recipient_email ASC'
+        )->fetchAll(\PDO::FETCH_ASSOC);
+
+        self::assertSame('literowka@@gmial', $rows[0]['recipient_email']);
+        self::assertSame('failed', $rows[0]['status']);
+        self::assertSame('Recipient email is invalid', $rows[0]['last_error']);
+        self::assertSame('pending', $rows[1]['status']);
+        self::assertNull($rows[1]['last_error']);
+        self::assertSame('pending', $rows[2]['status']);
+    }
+
+    public function testInvalidRecipientIsRecordedAsRejectedEventAndNeverPickedUpByWorker(): void
+    {
+        $this->service->enqueueBatch('app-a', [
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                ['to' => 'zly-adres'],
+                ['to' => 'ok@deliverable.test'],
+            ],
+        ]);
+
+        $event = $this->pdo->query(
+            "SELECT e.event_type, e.status, e.error_code, e.error_message
+             FROM email_events e
+             JOIN email_queue q ON q.id = e.email_id
+             WHERE q.recipient_email = 'zly-adres'"
+        )->fetch(\PDO::FETCH_ASSOC);
+
+        self::assertSame('rejected', $event['event_type']);
+        self::assertSame('failed', $event['status']);
+        self::assertSame('invalid_recipient', $event['error_code']);
+        self::assertSame('Recipient email is invalid', $event['error_message']);
+
+        // Worker claimuje tylko pending/retry - odrzucony wiersz jest terminalny.
+        $claimed = $this->repository->claimBatch(10, 300, 900, 'standard');
+        self::assertSame(['ok@deliverable.test'], array_column($claimed, 'recipient_email'));
+    }
+
+    public function testInvalidRecipientStoresNoAttachmentOnDisk(): void
+    {
+        $this->service->enqueueBatch('app-a', [
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [
+                [
+                    'to' => 'zly-adres',
+                    'attachments' => [[
+                        'filename' => 'kod-qr.png',
+                        'contentBase64' => self::tinyPngBase64(),
+                        'contentType' => 'image/png',
+                    ]],
+                ],
+                [
+                    'to' => 'ok@deliverable.test',
+                    'attachments' => [[
+                        'filename' => 'kod-qr.png',
+                        'contentBase64' => self::tinyPngBase64(),
+                        'contentType' => 'image/png',
+                    ]],
+                ],
+            ],
+        ]);
+
+        $attachments = $this->pdo->query(
+            'SELECT q.recipient_email
+             FROM email_attachments a
+             JOIN email_queue q ON q.id = a.email_id'
+        )->fetchAll(\PDO::FETCH_COLUMN);
+
+        self::assertSame(['ok@deliverable.test'], $attachments);
+    }
+
+    public function testBatchOfOnlyInvalidRecipientsIsAcceptedInsteadOfThrowing(): void
+    {
+        $result = $this->service->enqueueBatch('app-a', [
+            'subject' => 'Kody QR',
+            'html' => '<p>QR</p>',
+            'recipients' => [['to' => 'zly'], ['to' => 'tez-zly']],
+        ]);
+
+        self::assertSame(['failed', 'failed'], array_column($result->emails, 'status'));
+    }
+
+    private static function tinyPngBase64(): string
+    {
+        return 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=';
+    }
 }
