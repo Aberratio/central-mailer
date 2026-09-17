@@ -6,6 +6,7 @@ namespace CentralMailer\Queue;
 
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
+use CentralMailer\Config\LimitsConfig;
 use CentralMailer\Suppression\RecipientSuppressedException;
 use CentralMailer\Suppression\SuppressionRepository;
 use CentralMailer\Support\Uuid;
@@ -169,11 +170,11 @@ final class EmailQueueService
 
     private function maxQueuedEmailsPerClient(): int
     {
-        return max(1, $this->env?->int('EMAIL_MAX_QUEUED_PER_CLIENT', 10_000) ?? 10_000);
+        return LimitsConfig::fromEnv($this->env ?? new Env([]))->maxQueuedPerClient;
     }
 
     private function maxActiveAttachmentBytesPerClient(): int
     {
-        return max(0, $this->env?->int('EMAIL_MAX_ACTIVE_ATTACHMENT_BYTES_PER_CLIENT', 100_000_000) ?? 100_000_000);
+        return LimitsConfig::fromEnv($this->env ?? new Env([]))->maxActiveAttachmentBytesPerClient;
     }
 }

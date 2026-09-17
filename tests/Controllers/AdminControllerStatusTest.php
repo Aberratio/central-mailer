@@ -78,6 +78,37 @@ final class AdminControllerStatusTest extends DatabaseTestCase
         self::assertNull($byApp['app-b']['remaining']);
     }
 
+    public function testLimitsConfigReportsConfiguredValuesAndTheirSource(): void
+    {
+        $this->pdo->exec(
+            "UPDATE email_clients SET rate_limit_count = 3, rate_limit_window_minutes = 5 WHERE source_app = 'app-a'"
+        );
+
+        $payload = $this->decode($this->makeController([
+            'EMAIL_RATE_LIMIT_COUNT' => '300',
+            'EMAIL_RATE_LIMIT_WINDOW_MINUTES' => '15',
+            'GMAIL_RATE_LIMIT_COUNT' => '450',
+            'EMAIL_ENQUEUE_RATE_LIMIT_COUNT' => '60',
+            'EMAIL_WORKER_BATCH_SIZE' => '25',
+            'EMAIL_DATA_RETENTION_DAYS' => '30',
+        ]));
+
+        $config = $payload['limitsConfig'];
+        self::assertSame(300, $config['global']['count']);
+        self::assertSame(15, $config['global']['windowMinutes']);
+        self::assertSame(['EMAIL_RATE_LIMIT_COUNT', 'EMAIL_RATE_LIMIT_WINDOW_MINUTES'], $config['global']['env']);
+        self::assertTrue($config['gmail']['enabled']);
+        self::assertSame(450, $config['gmail']['count']);
+        self::assertSame(1440, $config['gmail']['windowMinutes']);
+        self::assertSame(60, $config['intake']['count']);
+        self::assertSame(25, $config['workers']['batchSize']);
+        self::assertSame(30, $config['retentionDays']);
+        self::assertSame([
+            ['sourceApp' => 'app-a', 'count' => 3, 'windowMinutes' => 5, 'source' => 'db'],
+            ['sourceApp' => 'app-b', 'count' => null, 'windowMinutes' => 15, 'source' => 'global'],
+        ], $config['clients']);
+    }
+
     public function testThroughputCountsOnlyEmailsSentInLastHour(): void
     {
         $this->insertQueueRow([

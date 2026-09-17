@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Http\Middleware;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Config\LimitsConfig;
 use CentralMailer\Queue\EnqueueRateLimitRepository;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -27,8 +28,9 @@ final class EnqueueRateLimitMiddleware implements MiddlewareInterface
         }
 
         $sourceApp = (string) $request->getAttribute('sourceApp');
-        $limit = max(1, $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_COUNT', 60));
-        $windowMinutes = max(1, $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_WINDOW_MINUTES', 1));
+        $limits = LimitsConfig::fromEnv($this->env);
+        $limit = $limits->intakeCount;
+        $windowMinutes = $limits->intakeWindowMinutes;
         $retentionMinutes = max(
             $windowMinutes,
             $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_RETENTION_MINUTES', 1440)
