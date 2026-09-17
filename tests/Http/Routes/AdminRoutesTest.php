@@ -217,6 +217,108 @@ final class AdminRoutesTest extends DatabaseTestCase
         self::assertNull($payload['emails'][0]['batchId']);
     }
 
+    public function testSentStatsRequiresAdminKey(): void
+    {
+        $response = $this->app()->handle((new ServerRequestFactory())->createServerRequest('GET', '/admin/stats/sent'));
+
+        self::assertSame(401, $response->getStatusCode());
+    }
+
+    public function testSentStatsDefaultsToLastSevenDaysWithZeroFilledDays(): void
+    {
+        $today = new \DateTimeImmutable('today');
+        $this->insertQueueRow([
+            'source_app' => 'app-a',
+            'status' => 'sent',
+            'sent_at' => $today->format('Y-m-d 09:15:00'),
+            'sent_queue' => 'technical',
+        ]);
+        $this->insertQueueRow([
+            'source_app' => 'app-b',
+            'status' => 'sent',
+            'sent_at' => $today->modify('-6 days')->format('Y-m-d 23:00:00'),
+            'sent_queue' => 'standard',
+        ]);
+        $this->insertQueueRow([
+            'source_app' => 'app-b',
+            'status' => 'sent',
+            'sent_at' => $today->modify('-7 days')->format('Y-m-d 23:00:00'),
+            'sent_queue' => 'standard',
+        ]);
+
+        [$status, $payload] = $this->getStats([]);
+
+        self::assertSame(200, $status);
+        self::assertSame('day', $payload['bucket']);
+        self::assertCount(7, $payload['buckets']);
+        self::assertSame($today->format('Y-m-d'), $payload['buckets'][0]['bucket']);
+        self::assertSame(1, $payload['buckets'][0]['byQueue']['technical']);
+        self::assertSame(1, $payload['buckets'][6]['sent']);
+        self::assertSame(0, $payload['buckets'][3]['sent']);
+        self::assertSame(2, $payload['totals']['sent']);
+        self::assertSame(['standard' => 1, 'technical' => 1], $payload['totals']['byQueue']);
+        self::assertSame([
+            ['sourceApp' => 'app-a', 'sent' => 1, 'byQueue' => ['standard' => 0, 'technical' => 1]],
+            ['sourceApp' => 'app-b', 'sent' => 1, 'byQueue' => ['standard' => 1, 'technical' => 0]],
+        ], $payload['totals']['bySourceApp']);
+        self::assertSame(['app-a', 'app-b'], $payload['sourceApps']);
+    }
+
+    public function testSentStatsUsesHourlyBucketsForShortRangesAndAppliesFilters(): void
+    {
+        $this->insertQueueRow(['source_app' => 'app-a', 'status' => 'sent', 'sent_at' => '2026-01-01 10:30:00', 'sent_queue' => 'standard']);
+        $this->insertQueueRow(['source_app' => 'app-a', 'status' => 'sent', 'sent_at' => '2026-01-01 11:10:00', 'sent_queue' => 'technical']);
+        $this->insertQueueRow(['source_app' => 'app-b', 'status' => 'sent', 'sent_at' => '2026-01-01 11:20:00', 'sent_queue' => 'standard']);
+
+        [$status, $payload] = $this->getStats([
+            'from' => '2026-01-01T10:00',
+            'to' => '2026-01-01 12:00',
+            'sourceApp' => 'app-a',
+        ]);
+
+        self::assertSame(200, $status);
+        self::assertSame('hour', $payload['bucket']);
+        self::assertSame(['2026-01-01 11:00', '2026-01-01 10:00'], array_column($payload['buckets'], 'bucket'));
+        self::assertSame(['sent' => 1, 'standard' => 0, 'technical' => 1], $payload['buckets'][0]['bySourceApp']['app-a']);
+        self::assertSame(2, $payload['totals']['sent']);
+        self::assertSame('app-a', $payload['filters']['sourceApp']);
+    }
+
+    /** @return iterable<string, array{array<string, string>}> */
+    public static function invalidStatsQueries(): iterable
+    {
+        yield 'malformed date' => [['from' => '01.01.2026']];
+        yield 'from after to' => [['from' => '2026-01-02', 'to' => '2026-01-01']];
+        yield 'longer than retention' => [['from' => '2026-01-01', 'to' => '2026-06-01']];
+        yield 'hourly over 7 days' => [['from' => '2026-01-01', 'to' => '2026-01-09', 'bucket' => 'hour']];
+        yield 'unknown queue' => [['queue' => 'gmail']];
+    }
+
+    /** @param array<string, string> $query */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidStatsQueries')]
+    public function testSentStatsRejectsInvalidQueries(array $query): void
+    {
+        [$status, $payload] = $this->getStats($query);
+
+        self::assertSame(400, $status);
+        self::assertSame('invalid_range', $payload['error']);
+    }
+
+    /**
+     * @param array<string, string> $query
+     * @return array{int, array<string, mixed>}
+     */
+    private function getStats(array $query): array
+    {
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/admin/stats/sent?' . http_build_query($query))
+            ->withQueryParams($query)
+            ->withHeader('X-Admin-Key', 'admin-secret');
+        $response = $this->app()->handle($request);
+
+        return [$response->getStatusCode(), json_decode((string) $response->getBody(), true, flags: JSON_THROW_ON_ERROR)];
+    }
+
     public function testClientEndpointsStillRequireClientApiKey(): void
     {
         $app = $this->app();

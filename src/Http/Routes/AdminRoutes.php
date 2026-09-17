@@ -14,6 +14,7 @@ final class AdminRoutes
         $app->get('/admin/status', [AdminController::class, 'status']);
         $app->get('/admin/unsent', [AdminController::class, 'unsent']);
         $app->get('/admin/sent', [AdminController::class, 'sent']);
+        $app->get('/admin/stats/sent', [AdminController::class, 'sentStats']);
         $app->post('/admin/emails/{id}/requeue', [AdminController::class, 'requeue']);
         $app->get('/admin/suppressions', [AdminController::class, 'suppressions']);
         $app->post('/admin/suppressions', [AdminController::class, 'addSuppression']);

@@ -399,6 +399,7 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame('pending', $this->fetchQueueRow($standardId)['status']);
         self::assertSame('sent', $this->fetchQueueRow($firstTechnicalId)['status']);
         self::assertSame('sent', $this->fetchQueueRow($secondTechnicalId)['status']);
+        self::assertSame('technical', $this->fetchQueueRow($firstTechnicalId)['sent_queue']);
     }
 
     public function testTechnicalWorkerRetryBlocksLaterTechnicalEmail(): void
@@ -472,6 +473,8 @@ final class EmailWorkerTest extends DatabaseTestCase
 
         self::assertSame([$technicalId], $standardProvider->sentIds);
         self::assertSame('sent', $this->fetchQueueRow($technicalId)['status']);
+        // Delivered by the standard worker after the fallback, so it must count as standard.
+        self::assertSame('standard', $this->fetchQueueRow($technicalId)['sent_queue']);
     }
 
     public function testTechnicalWorkerCanDisableFallbackToStandardQueue(): void
@@ -861,6 +864,7 @@ final class EmailWorkerTest extends DatabaseTestCase
         $row = $this->fetchQueueRow($id);
         self::assertSame('sent', $row['status']);
         self::assertSame('<accepted-after-timeout@mailer.test>', $row['provider_message_id']);
+        self::assertSame('standard', $row['sent_queue']);
         self::assertSame(1, (int) $this->pdo->query(
             "SELECT COUNT(*) FROM email_events WHERE email_id = '$id' AND event_type = 'lease_lost_provider_accepted'"
         )->fetchColumn());

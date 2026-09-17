@@ -6,6 +6,7 @@ namespace CentralMailer\Queue;
 
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
+use CentralMailer\Config\LimitsConfig;
 use CentralMailer\Email\EmailAttachment;
 use CentralMailer\Email\EmailBranding;
 use CentralMailer\Email\EmailMessage;
@@ -62,7 +63,8 @@ final class EmailWorker
         $this->releaseStaleProcessing();
         $this->cleanupTerminalAttachments();
 
-        $batchSize = $this->env->int('EMAIL_WORKER_BATCH_SIZE', 20);
+        $limits = LimitsConfig::fromEnv($this->env);
+        $batchSize = $limits->workerBatchSize;
         $leaseSeconds = $this->processingTimeoutSeconds();
         $priorityAgingSeconds = $this->env->int('EMAIL_PRIORITY_AGING_SECONDS', 900);
         if ($this->queue === 'standard') {
@@ -89,12 +91,11 @@ final class EmailWorker
             );
             // Gmail app-password SMTP has a hard daily cap (~500 consumer / 2000 Workspace);
             // exceeding it locks the account, so model it as a provider-scoped limit.
-            $gmailLimit = $this->env->int('GMAIL_RATE_LIMIT_COUNT', 0);
-            if ($decision->allowed && $gmailLimit > 0) {
+            if ($decision->allowed && $limits->gmailEnabled()) {
                 $decision = $this->rateLimiter->acquireProvider(
                     'gmail',
-                    $gmailLimit,
-                    $this->env->int('GMAIL_RATE_LIMIT_WINDOW_MINUTES', 1440)
+                    $limits->gmailCount,
+                    $limits->gmailWindowMinutes
                 );
             }
             if (!$decision->allowed) {
@@ -276,7 +277,8 @@ final class EmailWorker
                 (string) $row['lease_id'],
                 $result->providerMessageId,
                 $attempt,
-                $this->workerId()
+                $this->workerId(),
+                $this->queue
             );
             if ($markResult === 'lost') {
                 $this->logger->critical('Email was accepted by provider after its processing lease was lost', [

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use CentralMailer\Config\Env;
+use CentralMailer\Config\LimitsConfig;
 use CentralMailer\Database\Connection;
 use Dotenv\Dotenv;
 
@@ -15,7 +16,7 @@ if (is_file($root . '/.env')) {
 
 $env = new Env($_ENV);
 $pdo = Connection::create($env);
-$days = max(1, $env->int('EMAIL_DATA_RETENTION_DAYS', 90));
+$days = LimitsConfig::fromEnv($env)->dataRetentionDays;
 $cutoff = (new DateTimeImmutable(sprintf('-%d days', $days)))->format('Y-m-d H:i:s');
 $dryRun = in_array('--dry-run', $argv, true);
 

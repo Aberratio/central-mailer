@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Queue;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Config\LimitsConfig;
 
 final class RateLimiter
 {
@@ -14,8 +15,9 @@ final class RateLimiter
 
     public function acquire(string $sourceApp, ?int $clientLimit, ?int $clientWindowMinutes): RateLimitDecision
     {
-        $limit = $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100);
-        $windowMinutes = $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15);
+        $limits = LimitsConfig::fromEnv($this->env);
+        $limit = $limits->globalCount;
+        $windowMinutes = $limits->globalWindowMinutes;
         $effectiveClientWindowMinutes = $clientWindowMinutes ?? $windowMinutes;
         $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
         $clientSince = (new \DateTimeImmutable(sprintf('-%d minutes', $effectiveClientWindowMinutes)))->format('Y-m-d H:i:s');
