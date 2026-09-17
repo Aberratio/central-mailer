@@ -55,16 +55,17 @@ abstract class DatabaseTestCase extends TestCase
             'created_at' => '2026-01-01 10:00:00',
             'updated_at' => '2026-01-01 10:00:00',
             'sent_at' => null,
+            'sent_queue' => null,
             ...$overrides,
         ];
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
              (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body, text_body, priority, category, context_id, metadata, status,
-              lease_id, lease_expires_at, attempts, max_attempts, next_attempt_at, last_error, provider_message_id, created_at, updated_at, sent_at)
+              lease_id, lease_expires_at, attempts, max_attempts, next_attempt_at, last_error, provider_message_id, created_at, updated_at, sent_at, sent_queue)
              VALUES
              (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :context_id, :metadata, :status,
-              :lease_id, :lease_expires_at, :attempts, :max_attempts, :next_attempt_at, :last_error, :provider_message_id, :created_at, :updated_at, :sent_at)'
+              :lease_id, :lease_expires_at, :attempts, :max_attempts, :next_attempt_at, :last_error, :provider_message_id, :created_at, :updated_at, :sent_at, :sent_queue)'
         );
         $stmt->execute($row);
 
@@ -109,9 +110,11 @@ abstract class DatabaseTestCase extends TestCase
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 sent_at TEXT NULL,
+                sent_queue TEXT NULL,
                 UNIQUE (source_app, idempotency_key)
             )'
         );
+        $this->pdo->exec('CREATE INDEX idx_email_queue_sent_stats ON email_queue (status, sent_at, source_app, sent_queue)');
         $this->pdo->exec(
             'CREATE TABLE email_clients (
                 source_app TEXT PRIMARY KEY,

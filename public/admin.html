@@ -508,6 +508,72 @@
       border-bottom: 0;
     }
 
+    table.compact {
+      min-width: 560px;
+    }
+
+    th.num, td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .stats-panel {
+      display: grid;
+      gap: 12px;
+    }
+
+    .stats-panel h3 {
+      margin: 4px 0 0;
+    }
+
+    .preset-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .preset-row button.active {
+      background: var(--info-bg);
+      border-color: #bdd8f4;
+      color: var(--info);
+      font-weight: 700;
+    }
+
+    .stats-panel .filters {
+      margin-bottom: 0;
+    }
+
+    .field {
+      display: grid;
+      gap: 4px;
+    }
+
+    .total-cell {
+      display: grid;
+      grid-template-columns: minmax(60px, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-width: 160px;
+    }
+
+    .total-cell .bar {
+      height: 8px;
+    }
+
+    tr.drill {
+      cursor: pointer;
+    }
+
+    tr.drill:hover td {
+      background: #f3f7fc;
+    }
+
+    tr.sum-row td {
+      font-weight: 700;
+      background: #f8fafc;
+    }
+
     .mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
@@ -647,6 +713,12 @@
       td .pill {
         justify-self: start;
       }
+      td.num {
+        text-align: left;
+      }
+      .total-cell {
+        min-width: 0;
+      }
     }
 
     @media (max-width: 520px) {
@@ -743,9 +815,66 @@
           </dl>
         </div>
 
+        <section class="panel stats-panel">
+          <div class="row-head">
+            <h2 style="margin-bottom: 0;">Wysyłka</h2>
+            <span class="subtle" id="statsRangeLabel"></span>
+          </div>
+          <div class="preset-row" role="group" aria-label="Zakres statystyk">
+            <button type="button" data-preset="today">Dziś</button>
+            <button type="button" data-preset="yesterday">Wczoraj</button>
+            <button type="button" data-preset="7d">Ostatnie 7 dni</button>
+            <button type="button" data-preset="30d">Ostatnie 30 dni</button>
+            <button type="button" data-preset="custom">Własny zakres</button>
+          </div>
+          <div class="filters">
+            <label id="statsFromField" class="field hidden"><span class="subtle">Od</span><input id="statsFrom" type="datetime-local"></label>
+            <label id="statsToField" class="field hidden"><span class="subtle">Do (bez tej chwili)</span><input id="statsTo" type="datetime-local"></label>
+            <label class="field"><span class="subtle">Apka</span><select id="statsSource"><option value="">Wszystkie apki</option></select></label>
+            <label class="field"><span class="subtle">Worker</span>
+              <select id="statsQueue">
+                <option value="">Oba workery</option>
+                <option value="standard">Worker standardowy</option>
+                <option value="technical">Worker techniczny</option>
+              </select>
+            </label>
+          </div>
+          <div id="statsError" class="error hidden"></div>
+          <div class="headline-strip">
+            <div class="metric"><div class="label">Wysłane łącznie</div><div class="value" id="statsTotal">-</div></div>
+            <div class="metric"><div class="label">Worker standardowy</div><div class="value" id="statsStandard">-</div></div>
+            <div class="metric"><div class="label">Worker techniczny</div><div class="value" id="statsTechnical">-</div></div>
+          </div>
+          <h3>Według apki</h3>
+          <div class="table-wrap">
+            <table class="compact">
+              <thead><tr><th>Apka</th><th class="num">Standardowy</th><th class="num">Techniczny</th><th class="num">Łącznie</th></tr></thead>
+              <tbody id="statsAppRows"></tbody>
+            </table>
+          </div>
+          <div class="row-head">
+            <h3 id="statsBucketsTitle" style="margin-bottom: 0;">Dzień po dniu</h3>
+            <span class="subtle" id="statsBucketsHint"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="compact">
+              <thead id="statsBucketHead"></thead>
+              <tbody id="statsBucketRows"></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="panel">
           <h2>Limity</h2>
-          <div id="limits" class="limit-list"></div>
+          <div class="table-wrap">
+            <table class="compact">
+              <thead>
+                <tr><th>Limit</th><th>Ustawienie</th><th>Teraz w oknie</th><th>Odnowienie</th><th>Stan</th></tr>
+              </thead>
+              <tbody id="limitRows"></tbody>
+            </table>
+          </div>
+          <p class="subtle" id="limitsFootnote" style="margin-top: 10px;"></p>
         </section>
 
         <section class="tile-grid">
@@ -909,7 +1038,24 @@
       blockerEffect: document.getElementById('blockerEffect'),
       blockerWhen: document.getElementById('blockerWhen'),
       blockerRemedy: document.getElementById('blockerRemedy'),
-      limits: document.getElementById('limits'),
+      limitRows: document.getElementById('limitRows'),
+      limitsFootnote: document.getElementById('limitsFootnote'),
+      statsRangeLabel: document.getElementById('statsRangeLabel'),
+      statsFromField: document.getElementById('statsFromField'),
+      statsToField: document.getElementById('statsToField'),
+      statsFrom: document.getElementById('statsFrom'),
+      statsTo: document.getElementById('statsTo'),
+      statsSource: document.getElementById('statsSource'),
+      statsQueue: document.getElementById('statsQueue'),
+      statsError: document.getElementById('statsError'),
+      statsTotal: document.getElementById('statsTotal'),
+      statsStandard: document.getElementById('statsStandard'),
+      statsTechnical: document.getElementById('statsTechnical'),
+      statsAppRows: document.getElementById('statsAppRows'),
+      statsBucketsTitle: document.getElementById('statsBucketsTitle'),
+      statsBucketsHint: document.getElementById('statsBucketsHint'),
+      statsBucketHead: document.getElementById('statsBucketHead'),
+      statsBucketRows: document.getElementById('statsBucketRows'),
       tileStandard: document.getElementById('tileStandard'),
       tileTechnical: document.getElementById('tileTechnical'),
       apiVersion: document.getElementById('apiVersion'),
@@ -957,6 +1103,11 @@
     let lastGeneratedAt = null;
     const unsentSort = { key: null, dir: 'asc' };
     const sentSort = { key: null, dir: 'asc' };
+    const STATS_STORAGE_KEY = 'centralMailerSentStats';
+    const STATS_PRESETS = ['today', 'yesterday', '7d', '30d', 'custom'];
+    const statsState = loadStatsState();
+    let statsRequestId = 0;
+    let statsLoaded = false;
 
     if (adminKey) {
       els.adminKey.value = adminKey;
@@ -991,6 +1142,36 @@
     };
     els.contextFilter.addEventListener('input', scheduleContextRefresh);
     els.sentContextFilter.addEventListener('input', scheduleContextRefresh);
+
+    document.querySelectorAll('.preset-row button').forEach(button => {
+      button.addEventListener('click', () => selectStatsPreset(button.dataset.preset));
+    });
+    [els.statsFrom, els.statsTo].forEach(input => input.addEventListener('change', () => {
+      statsState.from = fromInputValue(els.statsFrom.value);
+      statsState.to = fromInputValue(els.statsTo.value);
+      saveStatsState();
+      loadSentStats();
+    }));
+    els.statsSource.addEventListener('change', () => {
+      statsState.sourceApp = els.statsSource.value;
+      saveStatsState();
+      loadSentStats();
+    });
+    els.statsQueue.addEventListener('change', () => {
+      statsState.queue = els.statsQueue.value;
+      saveStatsState();
+      loadSentStats();
+    });
+    els.statsBucketRows.addEventListener('click', (event) => {
+      const row = event.target.closest('tr.drill');
+      if (!row) return;
+      statsState.preset = 'custom';
+      statsState.from = row.dataset.start;
+      statsState.to = row.dataset.end;
+      saveStatsState();
+      loadSentStats();
+    });
+    syncStatsControls();
 
     els.navOverview.addEventListener('click', () => setMainTab('overview'));
     els.navQueue.addEventListener('click', () => setMainTab('queue'));
@@ -1039,7 +1220,8 @@
         const [status, unsent, sent] = await Promise.all([
           apiGet('/admin/status'),
           apiGet(`/admin/unsent?limit=100${contextParam(els.contextFilter.value)}`),
-          apiGet(`/admin/sent?limit=100${contextParam(els.sentContextFilter.value)}`)
+          apiGet(`/admin/sent?limit=100${contextParam(els.sentContextFilter.value)}`),
+          loadSentStats({ onlyIfLive: true })
         ]);
         renderStatus(status);
         unsentEmails = unsent.emails || [];
@@ -1062,7 +1244,7 @@
       const text = await response.text();
       const payload = text ? JSON.parse(text) : {};
       if (!response.ok) {
-        throw new Error(errorLabel(payload.error, response.status));
+        throw new Error(errorLabel(payload.message || payload.error, response.status));
       }
       return payload;
     }
@@ -1090,7 +1272,7 @@
       const issues = data.issues || [];
       renderVerdict(data, issues);
       renderBlocker(pickVerdictIssue(issues));
-      renderLimits(data.rateLimit || {}, data.generatedAt);
+      renderLimitsTable(data.rateLimit || {}, data.limitsConfig || null, data.generatedAt);
       renderWorkerTiles(data.workers || {}, data.generatedAt);
       renderQueueNumbers(data);
       renderClients(data.statusCounts?.bySourceApp || []);
@@ -1207,57 +1389,317 @@
       return { word: 'luz', cls: 'ok' };
     }
 
-    function barColor(cls) {
-      return { ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)', info: 'var(--info)' }[cls] || 'var(--info)';
+    function windowLabel(minutes) {
+      if (minutes === null || minutes === undefined) return '-';
+      if (minutes % 60 === 0) return `${minutes / 60} h`;
+      return `${minutes} min`;
     }
 
-    function limitRowHtml(name, about, row, generatedAt) {
+    function envNamesHtml(names) {
+      return (names || []).length
+        ? `<div class="muted-line mono">${names.map(escapeHtml).join(', ')}</div>`
+        : '';
+    }
+
+    // One table row per limit: the configured value (with the env variable it comes
+    // from), how much of the current window is used, when it renews, and a one-word state.
+    function limitTableRowHtml(name, about, settingHtml, row, generatedAt) {
       const state = limitState(row);
       const disabled = row.enabled === false || row.limit === 0;
       const noOwnLimit = row.limit === null || row.limit === undefined;
-      const pct = (!disabled && !noOwnLimit && row.limit > 0)
-        ? Math.min(100, Math.round((row.used / row.limit) * 100))
-        : 0;
-      const usageText = disabled
-        ? 'Limit wyłączony w konfiguracji.'
+      const usage = disabled
+        ? '-'
         : noOwnLimit
-          ? `${row.used} wysyłek w oknie (korzysta z limitu globalnego).`
-          : `${row.used} / ${row.limit} w bieżącym oknie.`;
-      const renewal = row.retryAfter
-        ? `<div class="muted-line">Odnowienie: ${escapeHtml(renewalLabel(row.retryAfter, generatedAt))}</div>`
-        : '';
+          ? `${row.used ?? 0} wysyłek`
+          : `${row.used ?? 0} / ${row.limit}`;
       return `
-        <div class="row-item">
-          <div class="row-head"><strong>${escapeHtml(name)}</strong><span class="pill ${state.cls}">${escapeHtml(state.word)}</span></div>
-          <div class="muted-line">${escapeHtml(about)}</div>
-          <div class="bar"><span style="width:${pct}%; background:${barColor(state.cls)}"></span></div>
-          <div class="muted-line">${escapeHtml(usageText)}</div>
-          ${renewal}
-        </div>
+        <tr>
+          <td data-label="Limit"><strong>${escapeHtml(name)}</strong><div class="muted-line">${escapeHtml(about)}</div></td>
+          <td data-label="Ustawienie">${settingHtml}</td>
+          <td data-label="Teraz w oknie">${escapeHtml(usage)}</td>
+          <td data-label="Odnowienie">${row.retryAfter ? escapeHtml(renewalLabel(row.retryAfter, generatedAt)) : '-'}</td>
+          <td data-label="Stan"><span class="pill ${state.cls}">${escapeHtml(state.word)}</span></td>
+        </tr>
       `;
     }
 
-    function renderLimits(rateLimit, generatedAt) {
+    function renderLimitsTable(rateLimit, config, generatedAt) {
       const rows = [];
-      rows.push(limitRowHtml('Globalny limit wysyłki', 'Ogranicza łączną liczbę wysyłek ze wszystkich klientów.', rateLimit.global || {}, generatedAt));
-      rows.push(limitRowHtml('Dzienny limit Gmaila', 'Dzienny pułap wysyłek przez kolejkę techniczną (Gmail SMTP).', rateLimit.provider?.gmail || {}, generatedAt));
+      const global = config?.global;
+      rows.push(limitTableRowHtml(
+        'Globalny limit wysyłki',
+        'Łączna liczba wysyłek ze wszystkich apek.',
+        global ? `${global.count} / ${windowLabel(global.windowMinutes)}${envNamesHtml(global.env)}` : '-',
+        rateLimit.global || {},
+        generatedAt
+      ));
+      const gmail = config?.gmail;
+      rows.push(limitTableRowHtml(
+        'Limit Gmaila',
+        'Pułap wysyłek workera technicznego (Gmail SMTP).',
+        gmail
+          ? `${gmail.enabled ? `${gmail.count} / ${windowLabel(gmail.windowMinutes)}` : 'wyłączony (0)'}${envNamesHtml(gmail.env)}`
+          : '-',
+        rateLimit.provider?.gmail || {},
+        generatedAt
+      ));
+      const clientConfig = Object.fromEntries((config?.clients || []).map(client => [client.sourceApp, client]));
       (rateLimit.byClient || []).forEach((client) => {
-        rows.push(limitRowHtml(
-          `Limit wysyłki: ${client.sourceApp}`,
-          'Ogranicza, ile wiadomości ten klient może mieć wysłanych w oknie czasowym.',
+        const cfg = clientConfig[client.sourceApp];
+        const setting = !cfg
+          ? '-'
+          : cfg.source === 'db'
+            ? `${cfg.count} / ${windowLabel(cfg.windowMinutes)}<div class="muted-line">z bazy (email_clients)</div>`
+            : `brak własnego<div class="muted-line">obowiązuje limit globalny</div>`;
+        rows.push(limitTableRowHtml(
+          `Wysyłka: ${client.sourceApp}`,
+          'Ile wiadomości ta apka może wysłać w oknie.',
+          setting,
           client,
           generatedAt
         ));
       });
+      const intake = config?.intake;
       (rateLimit.intake || []).forEach((client) => {
-        rows.push(limitRowHtml(
-          `Przyjmowanie zgłoszeń: ${client.sourceApp}`,
-          'Ogranicza, jak szybko klient może zgłaszać nowe wiadomości do wysłania (nie to samo, co limit wysyłki).',
+        rows.push(limitTableRowHtml(
+          `Przyjmowanie: ${client.sourceApp}`,
+          'Jak szybko apka może zgłaszać nowe wiadomości (to nie limit wysyłki).',
+          intake ? `${intake.count} / ${windowLabel(intake.windowMinutes)}${envNamesHtml(intake.env)}` : '-',
           client,
           generatedAt
         ));
       });
-      els.limits.innerHTML = rows.join('') || '<div class="empty">Brak danych o limitach.</div>';
+      els.limitRows.innerHTML = rows.join('');
+
+      const workers = config?.workers;
+      els.limitsFootnote.textContent = config
+        ? [
+            `Worker standardowy co ${workers.standardSleepSeconds} s, techniczny co ${workers.technicalSleepSeconds} s, paczka ${workers.batchSize} wiadomości, cron co ${workers.cronIntervalSeconds} s`,
+            `maks. ${config.capacity.maxQueuedPerClient} wiadomości w kolejce na apkę`,
+            `dane trzymane ${config.retentionDays} dni`
+          ].join(' · ')
+        : '';
+    }
+
+    // --- Przeglad: statystyki wysylki ------------------------------------------
+
+    function loadStatsState() {
+      const defaults = { preset: '7d', from: '', to: '', sourceApp: '', queue: '' };
+      try {
+        const saved = JSON.parse(localStorage.getItem(STATS_STORAGE_KEY) || '{}');
+        const state = { ...defaults, ...saved };
+        return STATS_PRESETS.includes(state.preset) ? state : defaults;
+      } catch (error) {
+        return defaults;
+      }
+    }
+
+    function saveStatsState() {
+      try {
+        localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(statsState));
+      } catch (error) {
+        // Remembering filters is a convenience; the panel works without storage.
+      }
+    }
+
+    function pad2(value) {
+      return String(value).padStart(2, '0');
+    }
+
+    // Local "YYYY-MM-DD HH:MM" - the same server-local wall time sent_at is stored in.
+    function formatLocal(date) {
+      return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+    }
+
+    function startOfDay(offsetDays) {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() + offsetDays);
+      return date;
+    }
+
+    function fromInputValue(value) {
+      return value ? value.replace('T', ' ') : '';
+    }
+
+    function toInputValue(value) {
+      return value ? value.slice(0, 16).replace(' ', 'T') : '';
+    }
+
+    function statsRange() {
+      switch (statsState.preset) {
+        case 'today': return { from: formatLocal(startOfDay(0)), to: formatLocal(startOfDay(1)) };
+        case 'yesterday': return { from: formatLocal(startOfDay(-1)), to: formatLocal(startOfDay(0)) };
+        case '30d': return { from: formatLocal(startOfDay(-29)), to: formatLocal(startOfDay(1)) };
+        case 'custom':
+          return {
+            from: statsState.from || formatLocal(startOfDay(0)),
+            to: statsState.to || formatLocal(startOfDay(1))
+          };
+        default: return { from: formatLocal(startOfDay(-6)), to: formatLocal(startOfDay(1)) };
+      }
+    }
+
+    function selectStatsPreset(preset) {
+      if (preset === 'custom' && statsState.preset !== 'custom') {
+        // Start the custom range from what is on screen, so it can be adjusted rather than retyped.
+        const current = statsRange();
+        statsState.from = current.from;
+        statsState.to = current.to;
+      }
+      statsState.preset = preset;
+      saveStatsState();
+      loadSentStats();
+    }
+
+    function syncStatsControls() {
+      const range = statsRange();
+      document.querySelectorAll('.preset-row button').forEach(button => {
+        button.classList.toggle('active', button.dataset.preset === statsState.preset);
+      });
+      els.statsQueue.value = statsState.queue;
+      const custom = statsState.preset === 'custom';
+      els.statsFromField.classList.toggle('hidden', !custom);
+      els.statsToField.classList.toggle('hidden', !custom);
+      if (custom) {
+        els.statsFrom.value = toInputValue(range.from);
+        els.statsTo.value = toInputValue(range.to);
+      }
+    }
+
+    // Never rejects: a stats failure is shown inside its own panel and must not
+    // blank the rest of the overview, which refreshAll() loads in parallel.
+    async function loadSentStats({ onlyIfLive = false } = {}) {
+      const range = statsRange();
+      const now = formatLocal(new Date());
+      // Auto-refresh only re-queries ranges that can still change; history stays as loaded.
+      if (onlyIfLive && statsLoaded && !(range.from <= now && now < range.to)) {
+        return;
+      }
+      syncStatsControls();
+      const requestId = ++statsRequestId;
+      const params = new URLSearchParams({ from: range.from, to: range.to });
+      if (statsState.sourceApp) params.set('sourceApp', statsState.sourceApp);
+      if (statsState.queue) params.set('queue', statsState.queue);
+      try {
+        const data = await apiGet(`/admin/stats/sent?${params.toString()}`);
+        if (requestId !== statsRequestId) return;
+        els.statsError.classList.add('hidden');
+        statsLoaded = true;
+        renderSentStats(data);
+      } catch (error) {
+        if (requestId !== statsRequestId) return;
+        const message = error.message || 'Nie udało się pobrać statystyk wysyłki.';
+        if (message.includes('klucz administratora')) {
+          showError(message);
+          return;
+        }
+        els.statsError.textContent = message;
+        els.statsError.classList.remove('hidden');
+      }
+    }
+
+    function dayLabel(day) {
+      if (day === formatLocal(startOfDay(0)).slice(0, 10)) return 'Dziś';
+      if (day === formatLocal(startOfDay(-1)).slice(0, 10)) return 'Wczoraj';
+      const date = new Date(`${day}T00:00:00`);
+      const weekday = ['nd', 'pn', 'wt', 'śr', 'cz', 'pt', 'sb'][date.getDay()];
+      return `${weekday} ${day.slice(8, 10)}.${day.slice(5, 7)}`;
+    }
+
+    function fullDate(day) {
+      return `${day.slice(8, 10)}.${day.slice(5, 7)}.${day.slice(0, 4)}`;
+    }
+
+    // "to" is exclusive; whole-day ranges read better as inclusive dates (11.09 – 17.09).
+    function rangeLabel(from, to) {
+      const midnight = (value) => value.slice(11, 16) === '00:00';
+      if (midnight(from) && midnight(to)) {
+        const lastDay = new Date(`${to.slice(0, 10)}T00:00:00`);
+        lastDay.setDate(lastDay.getDate() - 1);
+        const last = formatLocal(lastDay).slice(0, 10);
+        return last === from.slice(0, 10) ? fullDate(last) : `${fullDate(from)} – ${fullDate(last)}`;
+      }
+      return `${fullDate(from)} ${from.slice(11, 16)} – ${fullDate(to)} ${to.slice(11, 16)}`;
+    }
+
+    function updateStatsSourceOptions(sourceApps) {
+      const options = '<option value="">Wszystkie apki</option>'
+        + sourceApps.map(app => `<option value="${escapeHtml(app)}">${escapeHtml(app)}</option>`).join('');
+      els.statsSource.innerHTML = options;
+      els.statsSource.value = sourceApps.includes(statsState.sourceApp) ? statsState.sourceApp : '';
+    }
+
+    function renderSentStats(data) {
+      const totals = data.totals || { sent: 0, byQueue: {}, bySourceApp: [] };
+      const sourceApps = data.sourceApps || [];
+      updateStatsSourceOptions(sourceApps);
+      els.statsRangeLabel.textContent = rangeLabel(data.from, data.to);
+      els.statsTotal.textContent = totals.sent;
+      els.statsStandard.textContent = totals.byQueue.standard ?? 0;
+      els.statsTechnical.textContent = totals.byQueue.technical ?? 0;
+
+      const apps = data.filters?.sourceApp ? [data.filters.sourceApp] : sourceApps;
+      const appTotals = Object.fromEntries((totals.bySourceApp || []).map(row => [row.sourceApp, row]));
+      const appRows = apps.map(app => {
+        const row = appTotals[app] || { sent: 0, byQueue: { standard: 0, technical: 0 } };
+        return `
+          <tr>
+            <td data-label="Apka"><strong>${escapeHtml(app)}</strong></td>
+            <td data-label="Standardowy" class="num">${row.byQueue.standard}</td>
+            <td data-label="Techniczny" class="num">${row.byQueue.technical}</td>
+            <td data-label="Łącznie" class="num"><strong>${row.sent}</strong></td>
+          </tr>
+        `;
+      });
+      if (apps.length > 1) {
+        appRows.push(`
+          <tr class="sum-row">
+            <td data-label="Apka">Razem</td>
+            <td data-label="Standardowy" class="num">${totals.byQueue.standard ?? 0}</td>
+            <td data-label="Techniczny" class="num">${totals.byQueue.technical ?? 0}</td>
+            <td data-label="Łącznie" class="num">${totals.sent}</td>
+          </tr>
+        `);
+      }
+      els.statsAppRows.innerHTML = appRows.join('') || '<tr><td colspan="4">Brak aktywnych apek.</td></tr>';
+
+      const hourly = data.bucket === 'hour';
+      // Periods that have not started yet (rest of today) are always empty - skip them.
+      const now = formatLocal(new Date());
+      const buckets = (data.buckets || []).filter(bucket => bucket.start.slice(0, 16) <= now);
+      const spansDays = hourly && buckets.length > 0
+        && buckets[0].start.slice(0, 10) !== buckets[buckets.length - 1].start.slice(0, 10);
+      els.statsBucketsTitle.textContent = hourly ? 'Godzina po godzinie' : 'Dzień po dniu';
+      els.statsBucketsHint.textContent = hourly ? '' : 'Kliknij dzień, aby zobaczyć godziny.';
+      els.statsBucketHead.innerHTML = `
+        <tr>
+          <th>${hourly ? 'Godzina' : 'Dzień'}</th>
+          <th>Łącznie</th>
+          <th class="num">Standardowy</th>
+          <th class="num">Techniczny</th>
+          ${apps.map(app => `<th class="num">${escapeHtml(app)}</th>`).join('')}
+        </tr>
+      `;
+      const max = Math.max(1, ...buckets.map(bucket => bucket.sent));
+      els.statsBucketRows.innerHTML = buckets.map(bucket => {
+        const day = bucket.start.slice(0, 10);
+        const label = hourly
+          ? `${spansDays ? `${dayLabel(day)}, ` : ''}${bucket.start.slice(11, 16)}–${bucket.end.slice(11, 16)}`
+          : dayLabel(day);
+        const subLabel = !hourly && (label === 'Dziś' || label === 'Wczoraj') ? `<div class="muted-line">${fullDate(day)}</div>` : '';
+        const pct = Math.round((bucket.sent / max) * 100);
+        const drill = hourly ? '' : ` class="drill" data-start="${escapeHtml(bucket.start.slice(0, 16))}" data-end="${escapeHtml(bucket.end.slice(0, 16))}" title="Pokaż godziny tego dnia"`;
+        return `
+          <tr${drill}>
+            <td data-label="${hourly ? 'Godzina' : 'Dzień'}"><strong>${escapeHtml(label)}</strong>${subLabel}</td>
+            <td data-label="Łącznie"><div class="total-cell"><div class="bar"><span style="width:${pct}%; background:var(--info)"></span></div><strong class="num">${bucket.sent}</strong></div></td>
+            <td data-label="Standardowy" class="num">${bucket.byQueue.standard}</td>
+            <td data-label="Techniczny" class="num">${bucket.byQueue.technical}</td>
+            ${apps.map(app => `<td data-label="${escapeHtml(app)}" class="num">${bucket.bySourceApp?.[app]?.sent ?? 0}</td>`).join('')}
+          </tr>
+        `;
+      }).join('');
     }
 
     // --- Przeglad: kafle workerow ---------------------------------------------

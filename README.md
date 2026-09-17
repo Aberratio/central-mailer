@@ -532,6 +532,23 @@ worker heartbeats are stale (the plain `/health` stays 200 for the deploy gate).
 */10 * * * * cd /path/to/central-mailer-smtp/current && /usr/bin/php scripts/monitor-queue.php >> ../storage/logs/monitor.log 2>&1
 ```
 
+### Admin panel: sent statistics and limits
+
+The "Przegląd" tab of `/admin.html` shows how many emails were sent in a chosen range (today, yesterday,
+last 7/30 days or a custom date-time range), per app and per worker, day by day or hour by hour, plus a
+table of every limit with its configured value and the env variable it comes from. The data comes from:
+
+- `GET /admin/stats/sent?from=YYYY-MM-DD[ HH:MM]&to=...&bucket=auto|hour|day&sourceApp=...&queue=standard|technical`
+  (`X-Admin-Key`). `to` is exclusive; defaults to the last 7 days including today. `auto` uses hourly
+  buckets for ranges up to 48 h; hourly buckets are allowed up to 7 days, and no range may exceed
+  `EMAIL_DATA_RETENTION_DAYS` (older rows are deleted anyway).
+- `GET /admin/status` → `limitsConfig` (global, Gmail, intake and per-client limits, worker pacing, retention).
+
+The worker is taken from `email_queue.sent_queue` (migration `011`), which records the queue that actually
+delivered the email — a technical email sent by the standard worker after a fallback counts as standard.
+Days and hours are the server's local time (the same clock `sent_at` is written in), so PHP's
+`date.timezone` must be set to the timezone the panel is read in (e.g. `Europe/Warsaw`).
+
 ### Async bounce processing (optional)
 
 Most hard bounces are caught synchronously at SMTP time, but some relays accept the message and bounce

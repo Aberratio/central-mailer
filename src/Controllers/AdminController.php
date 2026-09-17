@@ -6,6 +6,7 @@ namespace CentralMailer\Controllers;
 
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
+use CentralMailer\Config\LimitsConfig;
 use CentralMailer\Http\ApiVersion;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EnqueueRateLimitRepository;
@@ -19,6 +20,9 @@ use Slim\Psr7\Response;
 
 final class AdminController
 {
+    private const MAX_HOURLY_RANGE_SECONDS = 7 * 86400;
+    private const AUTO_HOURLY_RANGE_SECONDS = 48 * 3600;
+
     public function __construct(
         private readonly PDO $pdo,
         private readonly AttachmentStorage $attachmentStorage,
@@ -61,8 +65,9 @@ final class AdminController
             $attachmentsStatus = 'error';
         }
 
-        $globalWindowMinutes = $this->env->int('EMAIL_RATE_LIMIT_WINDOW_MINUTES', 15);
-        $globalLimit = $this->env->int('EMAIL_RATE_LIMIT_COUNT', 100);
+        $limits = $this->limits();
+        $globalWindowMinutes = $limits->globalWindowMinutes;
+        $globalLimit = $limits->globalCount;
         $globalSince = (new \DateTimeImmutable(sprintf('-%d minutes', $globalWindowMinutes)))->format('Y-m-d H:i:s');
         $statusCounts = $this->repository->globalStatusCounts();
         $oldestUnsent = $this->repository->oldestUnsentGlobal();
@@ -118,6 +123,7 @@ final class AdminController
                 'byClient' => $this->byClientUsage($globalWindowMinutes),
                 'intake' => $this->intakeUsage(),
             ],
+            'limitsConfig' => $this->limitsConfig($limits),
             'throughput' => $throughput,
             'mailers' => $this->mailers(),
             'workers' => [
@@ -165,12 +171,13 @@ final class AdminController
      */
     private function gmailProviderUsage(): array
     {
-        $limit = $this->env->int('GMAIL_RATE_LIMIT_COUNT', 0);
-        if ($limit <= 0) {
+        $limits = $this->limits();
+        if (!$limits->gmailEnabled()) {
             return ['enabled' => false, 'used' => 0, 'limit' => 0, 'remaining' => null, 'retryAfter' => null];
         }
 
-        $windowMinutes = $this->env->int('GMAIL_RATE_LIMIT_WINDOW_MINUTES', 1440);
+        $limit = $limits->gmailCount;
+        $windowMinutes = $limits->gmailWindowMinutes;
         $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
         $usage = $this->rateLimitRepository->scopeUsage('provider:gmail', $limit, $since, $windowMinutes);
 
@@ -212,8 +219,8 @@ final class AdminController
             return [];
         }
 
-        $limit = max(1, $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_COUNT', 60));
-        $windowMinutes = max(1, $this->env->int('EMAIL_ENQUEUE_RATE_LIMIT_WINDOW_MINUTES', 1));
+        $limit = $this->limits()->intakeCount;
+        $windowMinutes = $this->limits()->intakeWindowMinutes;
         $since = (new \DateTimeImmutable(sprintf('-%d minutes', $windowMinutes)))->format('Y-m-d H:i:s');
 
         $intake = [];
@@ -225,6 +232,226 @@ final class AdminController
         }
 
         return $intake;
+    }
+
+    /**
+     * The configured values behind every limit, so the panel can show "300 / 15 min" and the env
+     * variable it comes from, not only how much of the current window is used.
+     *
+     * @return array<string, mixed>
+     */
+    private function limitsConfig(LimitsConfig $limits): array
+    {
+        $clients = [];
+        foreach ($this->repository->statusCountsBySourceApp() as $client) {
+            $sourceApp = (string) $client['sourceApp'];
+            $clientLimit = $this->repository->clientRateLimitForSourceApp($sourceApp);
+            $count = $clientLimit['rateLimitCount'] ?? null;
+            $clients[] = [
+                'sourceApp' => $sourceApp,
+                'count' => $count,
+                'windowMinutes' => $clientLimit['rateLimitWindowMinutes'] ?? $limits->globalWindowMinutes,
+                'source' => $count === null ? 'global' : 'db',
+            ];
+        }
+
+        return [
+            'global' => [
+                'count' => $limits->globalCount,
+                'windowMinutes' => $limits->globalWindowMinutes,
+                'env' => ['EMAIL_RATE_LIMIT_COUNT', 'EMAIL_RATE_LIMIT_WINDOW_MINUTES'],
+            ],
+            'gmail' => [
+                'enabled' => $limits->gmailEnabled(),
+                'count' => $limits->gmailCount,
+                'windowMinutes' => $limits->gmailWindowMinutes,
+                'env' => ['GMAIL_RATE_LIMIT_COUNT', 'GMAIL_RATE_LIMIT_WINDOW_MINUTES'],
+            ],
+            'intake' => [
+                'count' => $limits->intakeCount,
+                'windowMinutes' => $limits->intakeWindowMinutes,
+                'env' => ['EMAIL_ENQUEUE_RATE_LIMIT_COUNT', 'EMAIL_ENQUEUE_RATE_LIMIT_WINDOW_MINUTES'],
+            ],
+            'clients' => $clients,
+            'workers' => [
+                'standardSleepSeconds' => $limits->standardWorkerSleepSeconds,
+                'technicalSleepSeconds' => $limits->technicalWorkerSleepSeconds,
+                'batchSize' => $limits->workerBatchSize,
+                'cronIntervalSeconds' => $limits->workerCronIntervalSeconds,
+            ],
+            'capacity' => [
+                'maxQueuedPerClient' => $limits->maxQueuedPerClient,
+                'maxActiveAttachmentBytesPerClient' => $limits->maxActiveAttachmentBytesPerClient,
+            ],
+            'retentionDays' => $limits->dataRetentionDays,
+        ];
+    }
+
+    /**
+     * Sent-email counts over [from, to), bucketed by hour or day and split per client and per
+     * worker queue. Empty buckets are filled with zeros so the panel can render a gapless table.
+     */
+    public function sentStats(ServerRequestInterface $request): ResponseInterface
+    {
+        $query = $request->getQueryParams();
+        $today = new \DateTimeImmutable('today');
+        $from = self::statsDateQuery($query['from'] ?? null) ?? $today->modify('-6 days');
+        $to = self::statsDateQuery($query['to'] ?? null) ?? $today->modify('+1 day');
+        if ($from === false || $to === false) {
+            return $this->statsError('Nieprawidłowy format daty. Użyj RRRR-MM-DD lub RRRR-MM-DD GG:MM.');
+        }
+        if ($from >= $to) {
+            return $this->statsError('Początek zakresu musi być wcześniejszy niż jego koniec.');
+        }
+
+        $retentionDays = $this->limits()->dataRetentionDays;
+        $rangeSeconds = $to->getTimestamp() - $from->getTimestamp();
+        if ($rangeSeconds > $retentionDays * 86400) {
+            return $this->statsError(sprintf(
+                'Zakres nie może być dłuższy niż %d dni - starsze dane są usuwane.',
+                $retentionDays
+            ));
+        }
+
+        $bucket = isset($query['bucket']) && is_string($query['bucket']) ? $query['bucket'] : 'auto';
+        if (!in_array($bucket, ['auto', 'hour', 'day'], true)) {
+            return $this->statsError('Parametr bucket musi mieć wartość auto, hour lub day.');
+        }
+        if ($bucket === 'auto') {
+            $bucket = $rangeSeconds <= self::AUTO_HOURLY_RANGE_SECONDS ? 'hour' : 'day';
+        }
+        if ($bucket === 'hour' && $rangeSeconds > self::MAX_HOURLY_RANGE_SECONDS) {
+            return $this->statsError('Podział godzinowy jest dostępny dla zakresu do 7 dni.');
+        }
+
+        $sourceApp = isset($query['sourceApp']) && is_string($query['sourceApp']) && trim($query['sourceApp']) !== ''
+            ? trim($query['sourceApp'])
+            : null;
+        $queue = isset($query['queue']) && is_string($query['queue']) && $query['queue'] !== '' ? $query['queue'] : null;
+        if ($queue !== null && !in_array($queue, ['standard', 'technical'], true)) {
+            return $this->statsError('Parametr queue musi mieć wartość standard lub technical.');
+        }
+
+        $rows = $this->repository->sentCountsBetween(
+            $from->format('Y-m-d H:i:s'),
+            $to->format('Y-m-d H:i:s'),
+            $bucket,
+            $sourceApp,
+            $queue
+        );
+
+        $sourceApps = array_map(
+            static fn (array $client): string => (string) $client['sourceApp'],
+            $this->repository->statusCountsBySourceApp()
+        );
+        foreach ($rows as $row) {
+            if (!in_array($row['sourceApp'], $sourceApps, true)) {
+                $sourceApps[] = $row['sourceApp'];
+            }
+        }
+        sort($sourceApps);
+
+        return $this->json([
+            'generatedAt' => self::now(),
+            'from' => $from->format('Y-m-d H:i:s'),
+            'to' => $to->format('Y-m-d H:i:s'),
+            'bucket' => $bucket,
+            'filters' => ['sourceApp' => $sourceApp, 'queue' => $queue],
+            'retentionDays' => $retentionDays,
+            'sourceApps' => $sourceApps,
+            ...self::sentStatsBuckets($rows, $from, $to, $bucket),
+        ]);
+    }
+
+    /**
+     * @param list<array{bucket: string, sourceApp: string, queue: string, count: int}> $rows
+     * @return array{totals: array<string, mixed>, buckets: list<array<string, mixed>>}
+     */
+    private static function sentStatsBuckets(array $rows, \DateTimeImmutable $from, \DateTimeImmutable $to, string $bucket): array
+    {
+        $step = $bucket === 'hour' ? '+1 hour' : '+1 day';
+        $keyFormat = $bucket === 'hour' ? 'Y-m-d H' : 'Y-m-d';
+        $cursor = $bucket === 'hour'
+            ? $from->setTime((int) $from->format('H'), 0)
+            : $from->setTime(0, 0);
+
+        $emptyQueues = static fn (): array => ['sent' => 0, 'standard' => 0, 'technical' => 0];
+        $buckets = [];
+        while ($cursor < $to) {
+            $next = $cursor->modify($step);
+            $buckets[$cursor->format($keyFormat)] = [
+                'bucket' => $cursor->format($bucket === 'hour' ? 'Y-m-d H:00' : 'Y-m-d'),
+                'start' => $cursor->format('Y-m-d H:i:s'),
+                'end' => $next->format('Y-m-d H:i:s'),
+                'sent' => 0,
+                'byQueue' => ['standard' => 0, 'technical' => 0],
+                'bySourceApp' => [],
+            ];
+            $cursor = $next;
+        }
+
+        $totals = ['sent' => 0, 'byQueue' => ['standard' => 0, 'technical' => 0], 'bySourceApp' => []];
+        foreach ($rows as $row) {
+            $queue = $row['queue'] === 'technical' ? 'technical' : 'standard';
+            $count = $row['count'];
+            if (isset($buckets[$row['bucket']])) {
+                $entry = &$buckets[$row['bucket']];
+                $entry['sent'] += $count;
+                $entry['byQueue'][$queue] += $count;
+                $entry['bySourceApp'][$row['sourceApp']] ??= $emptyQueues();
+                $entry['bySourceApp'][$row['sourceApp']]['sent'] += $count;
+                $entry['bySourceApp'][$row['sourceApp']][$queue] += $count;
+                unset($entry);
+            }
+            $totals['sent'] += $count;
+            $totals['byQueue'][$queue] += $count;
+            $totals['bySourceApp'][$row['sourceApp']] ??= $emptyQueues();
+            $totals['bySourceApp'][$row['sourceApp']]['sent'] += $count;
+            $totals['bySourceApp'][$row['sourceApp']][$queue] += $count;
+        }
+
+        ksort($totals['bySourceApp']);
+        $totals['bySourceApp'] = array_map(
+            static fn (string $sourceApp, array $counts): array => [
+                'sourceApp' => $sourceApp,
+                'sent' => $counts['sent'],
+                'byQueue' => ['standard' => $counts['standard'], 'technical' => $counts['technical']],
+            ],
+            array_keys($totals['bySourceApp']),
+            $totals['bySourceApp']
+        );
+        foreach ($buckets as &$entry) {
+            // Empty maps must serialize as {} rather than [] for the panel.
+            $entry['bySourceApp'] = (object) $entry['bySourceApp'];
+        }
+        unset($entry);
+
+        return ['totals' => $totals, 'buckets' => array_reverse(array_values($buckets))];
+    }
+
+    /** Null when absent, false when present but malformed. */
+    private static function statsDateQuery(mixed $value): \DateTimeImmutable|false|null
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_string($value)) {
+            return false;
+        }
+        $value = str_replace('T', ' ', trim($value));
+        foreach (['Y-m-d H:i:s', 'Y-m-d H:i', 'Y-m-d'] as $format) {
+            $date = \DateTimeImmutable::createFromFormat('!' . $format, $value);
+            if ($date !== false && $date->format($format) === $value) {
+                return $date;
+            }
+        }
+
+        return false;
+    }
+
+    private function statsError(string $message): ResponseInterface
+    {
+        return $this->json(['error' => 'invalid_range', 'message' => $message], 400);
     }
 
     public function unsent(ServerRequestInterface $request): ResponseInterface
@@ -680,7 +907,12 @@ final class AdminController
 
     private function cronIntervalSeconds(): int
     {
-        return max(10, $this->env->int('EMAIL_WORKER_CRON_INTERVAL_SECONDS', 60));
+        return $this->limits()->workerCronIntervalSeconds;
+    }
+
+    private function limits(): LimitsConfig
+    {
+        return LimitsConfig::fromEnv($this->env);
     }
 
     private static function secondsSince(string $value, \DateTimeImmutable $now): ?int

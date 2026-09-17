@@ -508,14 +508,14 @@ final class EmailQueueRepository
         }
     }
 
-    public function markSent(string $id, string $leaseId, ?string $providerMessageId, int $attempt = 0): bool
+    public function markSent(string $id, string $leaseId, ?string $providerMessageId, int $attempt = 0, ?string $queue = null): bool
     {
         $this->pdo->beginTransaction();
         try {
             $stmt = $this->pdo->prepare(
                 'UPDATE email_queue
-                 SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at,
-                     next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
+                 SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, sent_queue = :sent_queue,
+                     updated_at = :updated_at, next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
                  WHERE id = :id AND status = "processing" AND lease_id = :lease_id'
             );
             $now = self::now();
@@ -524,6 +524,7 @@ final class EmailQueueRepository
                 'lease_id' => $leaseId,
                 'provider_message_id' => $providerMessageId,
                 'sent_at' => $now,
+                'sent_queue' => $queue,
                 'updated_at' => $now,
             ]);
             $marked = $stmt->rowCount() === 1;
@@ -544,14 +545,15 @@ final class EmailQueueRepository
         string $leaseId,
         ?string $providerMessageId,
         int $attempt,
-        string $workerId
+        string $workerId,
+        string $queue
     ): string {
         $this->pdo->beginTransaction();
         try {
             $stmt = $this->pdo->prepare(
                 'UPDATE email_queue
-                 SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at,
-                     next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
+                 SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, sent_queue = :sent_queue,
+                     updated_at = :updated_at, next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
                  WHERE id = :id AND status = "processing" AND lease_id = :lease_id'
             );
             $now = self::now();
@@ -560,6 +562,7 @@ final class EmailQueueRepository
                 'lease_id' => $leaseId,
                 'provider_message_id' => $providerMessageId,
                 'sent_at' => $now,
+                'sent_queue' => $queue,
                 'updated_at' => $now,
             ]);
             if ($stmt->rowCount() === 1) {
@@ -581,14 +584,15 @@ final class EmailQueueRepository
             if ($isSameLeaseTimeout) {
                 $reconcile = $this->pdo->prepare(
                     'UPDATE email_queue
-                     SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, updated_at = :updated_at,
-                         next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
+                     SET status = "sent", provider_message_id = :provider_message_id, sent_at = :sent_at, sent_queue = :sent_queue,
+                         updated_at = :updated_at, next_attempt_at = NULL, last_error = NULL, lease_id = NULL, lease_expires_at = NULL
                      WHERE id = :id AND status IN ("retry", "failed", "unknown") AND provider_message_id IS NULL'
                 );
                 $reconcile->execute([
                     'id' => $id,
                     'provider_message_id' => $providerMessageId,
                     'sent_at' => $now,
+                    'sent_queue' => $queue,
                     'updated_at' => $now,
                 ]);
                 if ($reconcile->rowCount() === 1) {
@@ -1377,6 +1381,48 @@ final class EmailQueueRepository
         $stmt->execute(['since' => $since]);
 
         return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Sent emails in [$from, $to) grouped by time bucket, client and the queue that delivered them.
+     * Buckets are string prefixes of sent_at ("Y-m-d H" or "Y-m-d") so the query stays portable
+     * between MySQL and SQLite and keeps the server-local time sent_at is written in.
+     * Rows sent before sent_queue existed and were not backfilled count as standard.
+     *
+     * @return list<array{bucket: string, sourceApp: string, queue: string, count: int}>
+     */
+    public function sentCountsBetween(string $from, string $to, string $bucket, ?string $sourceApp = null, ?string $queue = null): array
+    {
+        $bucketLength = match ($bucket) {
+            'hour' => 13,
+            'day' => 10,
+            default => throw new \InvalidArgumentException(sprintf('Unknown bucket: %s', $bucket)),
+        };
+        $clauses = '';
+        $params = ['from' => $from, 'to' => $to];
+        if ($sourceApp !== null) {
+            $clauses .= ' AND source_app = :source_app';
+            $params['source_app'] = $sourceApp;
+        }
+        if ($queue !== null) {
+            $clauses .= " AND COALESCE(sent_queue, 'standard') = :queue";
+            $params['queue'] = $queue;
+        }
+        $stmt = $this->pdo->prepare(
+            "SELECT SUBSTR(sent_at, 1, {$bucketLength}) AS bucket, source_app, COALESCE(sent_queue, 'standard') AS queue, COUNT(*) AS count
+             FROM email_queue
+             WHERE status = 'sent' AND sent_at >= :from AND sent_at < :to{$clauses}
+             GROUP BY SUBSTR(sent_at, 1, {$bucketLength}), source_app, COALESCE(sent_queue, 'standard')
+             ORDER BY bucket ASC, source_app ASC"
+        );
+        $stmt->execute($params);
+
+        return array_map(static fn (array $row): array => [
+            'bucket' => (string) $row['bucket'],
+            'sourceApp' => (string) $row['source_app'],
+            'queue' => (string) $row['queue'],
+            'count' => (int) $row['count'],
+        ], $stmt->fetchAll());
     }
 
     public function failedCountSince(string $since): int
