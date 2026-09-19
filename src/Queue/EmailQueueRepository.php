@@ -1457,7 +1457,7 @@ final class EmailQueueRepository
 
     private function addQueueCredits(): void
     {
-        // queue_weight must stay a signed column (migration 011): an UNSIGNED weight promotes
+        // queue_weight must stay a signed column (migration 012): an UNSIGNED weight promotes
         // this addition to BIGINT UNSIGNED and a negative queue_credit then aborts every claim
         // with SQLSTATE[22003].
         $this->pdo->exec(
@@ -1537,16 +1537,19 @@ final class EmailQueueRepository
         // queue_credit is a signed deficit counter: a client that outruns the queue stays
         // negative until the others go idle. Floor it so a long-running installation cannot
         // drift towards the BIGINT limit, mirroring the ceiling in addQueueCredits().
+        // Native prepares (ATTR_EMULATE_PREPARES off) reject a repeated named placeholder,
+        // so the spent amount is bound twice under two names.
         $stmt = $this->pdo->prepare(
             'UPDATE email_clients
              SET queue_credit = CASE
-                 WHEN queue_credit - :spent < -1000000000 THEN -1000000000
+                 WHEN queue_credit - :spent_check < -1000000000 THEN -1000000000
                  ELSE queue_credit - :spent
              END
              WHERE source_app = :source_app'
         );
         foreach ($counts as $sourceApp => $count) {
             $stmt->execute([
+                'spent_check' => $totalWeight * $count,
                 'spent' => $totalWeight * $count,
                 'source_app' => $sourceApp,
             ]);

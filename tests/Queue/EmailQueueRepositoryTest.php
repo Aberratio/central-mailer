@@ -358,6 +358,18 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
         self::assertSame($appAId, $second[0]['id']);
     }
 
+    public function testSpentQueueCreditIsFlooredAtLowerBound(): void
+    {
+        $this->pdo->exec("UPDATE email_clients SET queue_credit = -999999999 WHERE source_app = 'app-a'");
+        $this->insertQueueRow(['source_app' => 'app-a']);
+        $this->insertQueueRow(['source_app' => 'app-a', 'created_at' => '2026-01-01 10:01:00']);
+
+        $this->repository->claimBatch(2, 300, 900);
+
+        $credit = (int) $this->pdo->query("SELECT queue_credit FROM email_clients WHERE source_app = 'app-a'")->fetchColumn();
+        self::assertSame(-1000000000, $credit);
+    }
+
     public function testStandardQueueDoesNotClaimTechnicalEmail(): void
     {
         $technicalId = $this->insertQueueRow(['priority' => 'technical']);
