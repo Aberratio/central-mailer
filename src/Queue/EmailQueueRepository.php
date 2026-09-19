@@ -201,7 +201,11 @@ final class EmailQueueRepository
                 } else {
                     $this->insertEvent($emailId, 'queued', 'pending', 0, null, null, null, ['batchId' => $batchId], $now);
                 }
-                $emails[] = ['id' => $emailId, 'status' => $status];
+                $emails[] = [
+                    'id' => $emailId,
+                    'status' => $status,
+                    'lastError' => $suppressed ? 'Recipient address is suppressed' : $invalidReason,
+                ];
             }
             $this->pdo->commit();
 
@@ -1594,15 +1598,39 @@ final class EmailQueueRepository
         return $row === false ? null : $row;
     }
 
-    /** @return list<array{id: string, status: string}> */
+    /**
+     * Replays must list emails in recipient order, like the original response: clients map
+     * `emails[i]` back to `recipients[i]`. Every row of a batch shares one created_at and ids
+     * are random UUIDs, so the recipient index is read from the per-row idempotency key
+     * (`batch:<batchId>:<index>`), which only replayable (keyed) batches have.
+     *
+     * @return list<array{id: string, status: string, lastError: ?string}>
+     */
     private function findBatchEmails(string $batchId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, status FROM email_queue WHERE batch_id = :batch_id ORDER BY created_at ASC, id ASC'
+            'SELECT id, status, last_error, idempotency_key FROM email_queue WHERE batch_id = :batch_id ORDER BY created_at ASC, id ASC'
         );
         $stmt->execute(['batch_id' => $batchId]);
+        $rows = $stmt->fetchAll();
+        usort($rows, static function (array $a, array $b): int {
+            return self::batchRecipientIndex($a['idempotency_key']) <=> self::batchRecipientIndex($b['idempotency_key']);
+        });
 
-        return $stmt->fetchAll();
+        return array_map(static fn (array $row): array => [
+            'id' => (string) $row['id'],
+            'status' => (string) $row['status'],
+            'lastError' => $row['last_error'] === null ? null : (string) $row['last_error'],
+        ], $rows);
+    }
+
+    private static function batchRecipientIndex(mixed $idempotencyKey): int
+    {
+        if (!is_string($idempotencyKey) || preg_match('/:(\d+)$/', $idempotencyKey, $match) !== 1) {
+            return PHP_INT_MAX;
+        }
+
+        return (int) $match[1];
     }
 
     /** @param list<array<string, mixed>> $attachments */

@@ -675,7 +675,7 @@ HTML;
                     ],
                     'EmailBatchResponse' => [
                         'type' => 'object',
-                        'description' => 'Wynik utworzenia batcha. Kazdy element `emails` jest osobna wiadomoscia z wlasnym identyfikatorem.',
+                        'description' => 'Wynik utworzenia batcha. Kazdy element `emails` jest osobna wiadomoscia z wlasnym identyfikatorem; kolejnosc odpowiada kolejnosci `recipients`, rowniez przy idempotentnym powtorzeniu.',
                         'required' => ['id', 'emails'],
                         'properties' => [
                             'id' => ['type' => 'string', 'format' => 'uuid', 'description' => 'Identyfikator batcha.'],
@@ -773,6 +773,11 @@ HTML;
                                 'enum' => ['pending', 'processing', 'sent', 'retry', 'failed'],
                                 'description' => 'Biezacy status. Nowa wiadomosc zwykle ma status `pending`.',
                                 'example' => 'pending',
+                            ],
+                            'lastError' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'description' => 'Tylko w batchu: powod odrzucenia odbiorcy (np. nieprawidlowy albo zablokowany adres).',
                             ],
                         ],
                     ],

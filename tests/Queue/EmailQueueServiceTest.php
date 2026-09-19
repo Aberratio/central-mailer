@@ -169,6 +169,27 @@ final class EmailQueueServiceTest extends DatabaseTestCase
         self::assertSame(['ok@deliverable.test'], $attachments);
     }
 
+    public function testBatchReplayListsEmailsInRecipientOrderWithRejectionReason(): void
+    {
+        // Clients map emails[i] back to recipients[i]; a replay after a client timeout must
+        // not shuffle them, or the wrong participant would be reported as rejected.
+        $recipients = [];
+        for ($i = 0; $i < 20; $i++) {
+            $recipients[] = ['to' => $i === 7 ? 'literowka@@gmial' : sprintf('ok%d@deliverable.test', $i)];
+        }
+        $payload = ['subject' => 'Kody QR', 'html' => '<p>QR</p>', 'recipients' => $recipients];
+
+        $first = $this->service->enqueueBatch('app-a', $payload, 'replay-order-key');
+        $replay = $this->service->enqueueBatch('app-a', $payload, 'replay-order-key');
+
+        self::assertFalse($replay->created);
+        self::assertSame(array_column($first->emails, 'id'), array_column($replay->emails, 'id'));
+        self::assertSame('failed', $first->emails[7]['status']);
+        self::assertSame('Recipient email is invalid', $first->emails[7]['lastError']);
+        self::assertSame('Recipient email is invalid', $replay->emails[7]['lastError']);
+        self::assertNull($replay->emails[0]['lastError']);
+    }
+
     public function testBatchOfOnlyInvalidRecipientsIsAcceptedInsteadOfThrowing(): void
     {
         $result = $this->service->enqueueBatch('app-a', [
