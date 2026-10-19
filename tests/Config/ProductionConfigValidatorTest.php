@@ -94,4 +94,33 @@ final class ProductionConfigValidatorTest extends TestCase
             'ADMIN_API_KEY' => str_repeat('c', 32),
         ]));
     }
+
+    public function testRejectsLogMailTransportOutsideLocalAndTesting(): void
+    {
+        foreach (['production', 'staging'] as $appEnv) {
+            try {
+                ProductionConfigValidator::validate(new Env(['APP_ENV' => $appEnv, 'MAIL_TRANSPORT' => 'log']));
+                self::fail('log transport must be rejected for ' . $appEnv);
+            } catch (\RuntimeException $exception) {
+                self::assertStringContainsString('MAIL_TRANSPORT=log', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testAllowsLogMailTransportForLocalAndTesting(): void
+    {
+        foreach (['local', 'testing'] as $appEnv) {
+            ProductionConfigValidator::validate(new Env(['APP_ENV' => $appEnv, 'MAIL_TRANSPORT' => 'log']));
+        }
+
+        self::assertTrue(true);
+    }
+
+    public function testRejectsUnknownMailTransport(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('MAIL_TRANSPORT');
+
+        ProductionConfigValidator::validate(new Env(['APP_ENV' => 'local', 'MAIL_TRANSPORT' => 'carrier-pigeon']));
+    }
 }

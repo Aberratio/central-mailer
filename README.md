@@ -45,6 +45,7 @@ For production: `APP_DEBUG=false`, HTTPS `APP_URL`, explicit CORS origins, `APP_
 | `BACKUP_RETENTION_DAYS`, `BACKUP_ENCRYPTION_KEY` | Database backups |
 | `UNSUBSCRIBE_SECRET(_PREVIOUS)` | HMAC secret for one-click unsubscribe links |
 | `LOG_LEVEL`, `LOG_DIR`, `LOG_MAX_FILES` | Logging (empty `LOG_DIR` uses `storage/logs`) |
+| `MAIL_TRANSPORT`, `MAIL_LOG_DIR` | `smtp` (default) or `log` (local/testing only, writes `.eml` files; see "Lokalny e2e") |
 
 The `email_clients` table is the source of truth for authentication, activation, queue weight, and per-client rate limits — the backend never trusts the `sourceApp` field from the request body. Legacy `.env` keys are auto-seeded/rotated into `email_clients` on startup.
 
@@ -111,6 +112,23 @@ Scheduling order: effective high priority → weighted fairness between clients 
 Retries use exponential backoff (60s doubling to 3600s) with jitter. Permanent SMTP rejections (5xx, except 552) fail immediately; hard bounces (`5.1.*`, `5.2.1`) also add the address to the suppression list. The suppression list blocks sending to dead/opted-out addresses at both enqueue and send time.
 
 The sender name, reply-to, logo, and footer are configured once in `src/Email/EmailBrandConfig.php` and applied by the worker at send time.
+
+## Lokalny e2e
+
+For local end-to-end tests (e.g. an application talking to a locally running Central Mailer) no real SMTP account is needed: the `log` transport builds the complete MIME message (headers including `Reply-To`, subject, HTML/text, attachments and inline images) and writes it to an `.eml` file instead of sending it. The worker reports success just like a real provider, so statuses, retries and idempotency behave normally. It works for both the standard and the `technical` queue.
+
+```bash
+# in .env (or process environment)
+APP_ENV=local            # log transport is accepted ONLY for local / testing
+MAIL_TRANSPORT=log       # default: smtp
+MAIL_LOG_DIR=            # optional, default storage/mail (git-ignored)
+
+php scripts/validate-config.php   # fails when MAIL_TRANSPORT=log with any other APP_ENV
+php scripts/run-migrations.php
+composer serve & composer worker
+```
+
+Files are named `<UTC timestamp>-<message id>.eml`. `validate-config.php` and both workers refuse to start with `MAIL_TRANSPORT=log` outside `local`/`testing` (and with unknown transport values), so the log transport cannot be enabled in staging or production by accident.
 
 ## Monitoring
 

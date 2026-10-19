@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace CentralMailer\Config;
 
+use CentralMailer\Email\MailTransport;
+
 final class ProductionConfigValidator
 {
     public static function validate(Env $env): void
     {
+        MailTransport::assertValid($env);
+
         if (strtolower($env->string('APP_ENV', 'local')) !== 'production') {
             return;
         }

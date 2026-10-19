@@ -5,3 +5,5 @@
 /storage/logs/cron.log
 /storage/attachments/*
 !/storage/attachments/.gitkeep
+/storage/mail/*
+!/storage/mail/.gitkeep

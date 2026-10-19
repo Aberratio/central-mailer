@@ -11,7 +11,7 @@ use CentralMailer\Client\ClientRepository;
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Database\Connection;
 use CentralMailer\Email\EmailProviderInterface;
-use CentralMailer\Email\SmtpEmailProvider;
+use CentralMailer\Email\MailTransport;
 use CentralMailer\Http\ErrorMiddleware;
 use CentralMailer\Http\Middleware\AdminKeyAuthMiddleware;
 use CentralMailer\Http\Middleware\ApiKeyAuthMiddleware;
@@ -108,7 +108,7 @@ $container->set(UnsubscribeController::class, function ($c) {
         $c->get(LoggerInterface::class)
     );
 });
-$container->set(EmailProviderInterface::class, fn ($c) => new SmtpEmailProvider($c->get(Env::class)));
+$container->set(EmailProviderInterface::class, fn ($c) => MailTransport::createProvider($c->get(Env::class), 'standard', dirname(__DIR__)));
 $container->set(EmailWorker::class, fn ($c) => new EmailWorker(
     $c->get(EmailQueueRepository::class),
     $c->get(EmailProviderInterface::class),
