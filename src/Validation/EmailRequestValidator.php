@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CentralMailer\Validation;
 
 use CentralMailer\Config\Env;
+use CentralMailer\Email\MailTransport;
 
 final class EmailRequestValidator
 {
@@ -288,6 +289,11 @@ final class EmailRequestValidator
     private function validateRecipientDomain(string $email): void
     {
         $domain = strtolower((string) substr(strrchr($email, '@') ?: '', 1));
+        // MAIL_TRANSPORT=log (local/testing only) delivers nothing, so reserved example domains and
+        // DNS checks would only get in the way of local e2e runs.
+        if ($domain !== '' && MailTransport::name($this->env) === MailTransport::LOG) {
+            return;
+        }
         if ($domain === '' || in_array($domain, self::NON_DELIVERABLE_DOMAINS, true)) {
             throw new \InvalidArgumentException('Recipient email domain cannot receive email');
         }
