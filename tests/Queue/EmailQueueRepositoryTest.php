@@ -323,6 +323,56 @@ final class EmailQueueRepositoryTest extends DatabaseTestCase
         $this->repository->insert([...$data, 'subject' => 'Different subject']);
     }
 
+    public function testInsertStoresReplyToWithTheMessage(): void
+    {
+        $result = $this->repository->insert([
+            ...$this->queueData(),
+            'replyTo' => ['email' => 'organizer@club.test', 'name' => 'Klub Biegowy'],
+        ]);
+
+        $row = $this->fetchQueueRow($result->id);
+        self::assertSame('organizer@club.test', $row['reply_to_email']);
+        self::assertSame('Klub Biegowy', $row['reply_to_name']);
+
+        $plain = $this->repository->insert([...$this->queueData(), 'idempotencyKey' => 'request-456']);
+        $plainRow = $this->fetchQueueRow($plain->id);
+        self::assertNull($plainRow['reply_to_email']);
+        self::assertNull($plainRow['reply_to_name']);
+    }
+
+    public function testSameIdempotencyKeyWithDifferentReplyToIsAConflict(): void
+    {
+        $data = [...$this->queueData(), 'replyTo' => ['email' => 'organizer@club.test', 'name' => null]];
+        $created = $this->repository->insert($data);
+
+        $replayed = $this->repository->insert($data);
+        self::assertFalse($replayed->created);
+        self::assertSame($created->id, $replayed->id);
+
+        foreach ([
+            ['email' => 'other@club.test', 'name' => null],
+            ['email' => 'organizer@club.test', 'name' => 'Named'],
+            null,
+        ] as $different) {
+            try {
+                $this->repository->insert([...$data, 'replyTo' => $different]);
+                self::fail('Different replyTo must conflict');
+            } catch (IdempotencyConflictException) {
+                self::assertTrue(true);
+            }
+        }
+    }
+
+    public function testRequestWithoutReplyToKeepsItsPreviousHash(): void
+    {
+        $result = $this->repository->insert($this->queueData());
+
+        $withNull = $this->repository->insert([...$this->queueData(), 'replyTo' => null]);
+
+        self::assertFalse($withNull->created);
+        self::assertSame($result->id, $withNull->id);
+    }
+
     public function testAgedNormalEmailIsNotStarvedByRecentHighEmail(): void
     {
         $agedNormalId = $this->insertQueueRow([

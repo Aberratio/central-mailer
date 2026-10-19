@@ -30,6 +30,7 @@ final class GmailSmtpEmailProvider implements EmailProviderInterface
         $mail->AltBody = '';
         $mail->MessageID = sprintf('<%s@%s>', $message->id, $this->messageIdDomain());
         $mail->addAddress($message->to);
+        ReplyTo::apply($mail, $message, $this->brandConfig);
         $mail->Subject = $message->subject;
         $mail->Body = $message->html;
         if ($message->text !== null) {
@@ -94,7 +95,6 @@ final class GmailSmtpEmailProvider implements EmailProviderInterface
 
         $mail->CharSet = 'UTF-8';
         $mail->setFrom($this->env->string('GMAIL_FROM_EMAIL'), $this->brandConfig->senderName);
-        $this->addReplyTo($mail);
         $mail->isHTML(true);
 
         return $this->mailer = $mail;
@@ -113,15 +113,6 @@ final class GmailSmtpEmailProvider implements EmailProviderInterface
         return $domain !== '' ? $domain : 'localhost.localdomain';
     }
 
-    private function addReplyTo(PHPMailer $mail): void
-    {
-        if ($this->brandConfig->replyToEmail !== null) {
-            $mail->addReplyTo(
-                $this->brandConfig->replyToEmail,
-                $this->brandConfig->replyToName ?? $this->brandConfig->senderName
-            );
-        }
-    }
 
     private function addInlineAttachment(PHPMailer $mail, EmailAttachment $attachment): void
     {

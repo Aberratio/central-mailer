@@ -43,6 +43,7 @@ final class EmailRequestValidator
         $priority = $this->priority($payload['priority'] ?? 'normal');
         $category = $this->category($payload['category'] ?? null, $priority, $defaultCategory);
         $contextId = $this->contextId($payload['contextId'] ?? null);
+        $replyTo = $this->replyTo($payload['replyTo'] ?? null);
         $metadata = $payload['metadata'] ?? null;
         $attachments = $this->attachments($payload['attachments'] ?? []);
 
@@ -73,6 +74,7 @@ final class EmailRequestValidator
             'priority' => $priority,
             'category' => $category,
             'contextId' => $contextId,
+            'replyTo' => $replyTo,
             'metadata' => $metadata,
             'attachments' => $attachments,
         ];
@@ -180,6 +182,38 @@ final class EmailRequestValidator
         }
 
         return [...$common, 'attachments' => $commonAttachments, 'recipients' => $validatedRecipients];
+    }
+
+    /** @return array{email: string, name: string|null}|null */
+    private function replyTo(mixed $value): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_array($value) || array_is_list($value) && $value !== []) {
+            throw new \InvalidArgumentException('replyTo must be an object with email and optional name');
+        }
+
+        $email = $value['email'] ?? null;
+        $email = is_string($email) ? trim($email) : '';
+        if ($email === '' || strlen($email) > 255 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new \InvalidArgumentException('replyTo.email must be a valid email address');
+        }
+
+        $name = $value['name'] ?? null;
+        if ($name !== null && !is_string($name)) {
+            throw new \InvalidArgumentException('replyTo.name must be a string');
+        }
+        $name = $name === null ? null : trim($name);
+        if ($name === '') {
+            $name = null;
+        }
+        if ($name !== null && (mb_strlen($name) > 255 || preg_match('/[\x00-\x1F\x7F]/', $name))) {
+            throw new \InvalidArgumentException('replyTo.name must be at most 255 characters without control characters');
+        }
+
+        return ['email' => $email, 'name' => $name];
     }
 
     private function contextId(mixed $value): ?string

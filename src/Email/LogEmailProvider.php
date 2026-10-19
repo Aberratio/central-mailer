@@ -28,14 +28,9 @@ final class LogEmailProvider implements EmailProviderInterface
         $domain = substr(strrchr($this->fromEmail, '@') ?: '', 1);
         $mail->Hostname = $domain !== '' ? $domain : 'localhost.localdomain';
         $mail->setFrom($this->fromEmail, $this->brandConfig->senderName);
-        if ($this->brandConfig->replyToEmail !== null) {
-            $mail->addReplyTo(
-                $this->brandConfig->replyToEmail,
-                $this->brandConfig->replyToName ?? $this->brandConfig->senderName
-            );
-        }
         $mail->MessageID = sprintf('<%s@%s>', $message->id, $mail->Hostname);
         $mail->addAddress($message->to);
+        ReplyTo::apply($mail, $message, $this->brandConfig);
         $mail->Subject = $message->subject;
         $mail->Body = $message->html;
         $mail->AltBody = $message->text ?? trim($mail->html2text($message->html));

@@ -17,7 +17,9 @@ final class EmailMessage
         public readonly string $html,
         public readonly ?string $text,
         public readonly array $attachments = [],
-        public readonly array $headers = []
+        public readonly array $headers = [],
+        public readonly ?string $replyToEmail = null,
+        public readonly ?string $replyToName = null
     ) {
     }
 }

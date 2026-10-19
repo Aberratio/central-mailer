@@ -268,7 +268,9 @@ final class EmailWorker
                 $row['resolved_html_body'],
                 $row['resolved_text_body'],
                 $attachments,
-                $this->unsubscribeHeaders($row)
+                $this->unsubscribeHeaders($row),
+                isset($row['reply_to_email']) ? (string) $row['reply_to_email'] : null,
+                isset($row['reply_to_name']) ? (string) $row['reply_to_name'] : null
             );
             $result = $this->provider->send($this->branding->apply($message));
 

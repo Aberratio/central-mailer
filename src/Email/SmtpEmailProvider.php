@@ -30,6 +30,7 @@ final class SmtpEmailProvider implements EmailProviderInterface
         $mail->AltBody = '';
         $mail->MessageID = $this->messageId($message);
         $mail->addAddress($message->to);
+        ReplyTo::apply($mail, $message, $this->brandConfig);
         $mail->Subject = $message->subject;
         $mail->Body = $message->html;
         if ($message->text !== null) {
@@ -100,7 +101,6 @@ final class SmtpEmailProvider implements EmailProviderInterface
 
         $mail->CharSet = 'UTF-8';
         $mail->setFrom($this->env->string('SMTP_FROM_EMAIL'), $this->brandConfig->senderName);
-        $this->addReplyTo($mail);
         $mail->isHTML(true);
         $this->configureDkim($mail);
 
@@ -145,15 +145,6 @@ final class SmtpEmailProvider implements EmailProviderInterface
         return sprintf('<%s@%s>', $message->id, $this->messageIdDomain());
     }
 
-    private function addReplyTo(PHPMailer $mail): void
-    {
-        if ($this->brandConfig->replyToEmail !== null) {
-            $mail->addReplyTo(
-                $this->brandConfig->replyToEmail,
-                $this->brandConfig->replyToName ?? $this->brandConfig->senderName
-            );
-        }
-    }
 
     private function addInlineAttachment(PHPMailer $mail, EmailAttachment $attachment): void
     {

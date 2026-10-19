@@ -32,9 +32,9 @@ final class EmailQueueRepository
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
-            (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, category, context_id, metadata, status, attempts, max_attempts, created_at, updated_at)
+            (id, source_app, idempotency_key, request_hash, recipient_email, subject, html_body, text_body, priority, category, context_id, reply_to_email, reply_to_name, metadata, status, attempts, max_attempts, created_at, updated_at)
             VALUES
-            (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :context_id, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
+            (:id, :source_app, :idempotency_key, :request_hash, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :context_id, :reply_to_email, :reply_to_name, :metadata, "pending", 0, :max_attempts, :created_at, :updated_at)'
         );
 
         $this->pdo->beginTransaction();
@@ -59,6 +59,8 @@ final class EmailQueueRepository
                 'priority' => $data['priority'],
                 'category' => $data['category'] ?? 'transactional',
                 'context_id' => $data['contextId'] ?? null,
+                'reply_to_email' => $data['replyTo']['email'] ?? null,
+                'reply_to_name' => $data['replyTo']['name'] ?? null,
                 'metadata' => $metadata,
                 'max_attempts' => $data['maxAttempts'] ?? 5,
                 'created_at' => $now,
@@ -1736,6 +1738,10 @@ final class EmailQueueRepository
         // Only hashed when present so replays of pre-contextId requests keep their original hash.
         if (($data['contextId'] ?? null) !== null) {
             $hashed['contextId'] = $data['contextId'];
+        }
+        // Same rule for replyTo: an absent value must not change the hash of earlier requests.
+        if (($data['replyTo'] ?? null) !== null) {
+            $hashed['replyTo'] = ['email' => $data['replyTo']['email'], 'name' => $data['replyTo']['name'] ?? null];
         }
 
         return hash('sha256', json_encode($hashed, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
