@@ -128,7 +128,7 @@ php scripts/run-migrations.php
 composer serve & composer worker
 ```
 
-Files are named `<UTC timestamp>-<message id>.eml`. `validate-config.php` and both workers refuse to start with `MAIL_TRANSPORT=log` outside `local`/`testing` (and with unknown transport values), so the log transport cannot be enabled in staging or production by accident.
+With the log transport recipient validation skips the reserved-domain (`example.com`, ...) and DNS checks, so local runs can use `@example.com` addresses. Files are named `<UTC timestamp>-<message id>.eml`. `validate-config.php` and both workers refuse to start with `MAIL_TRANSPORT=log` outside `local`/`testing` (and with unknown transport values), so the log transport cannot be enabled in staging or production by accident.
 
 ## Monitoring
 

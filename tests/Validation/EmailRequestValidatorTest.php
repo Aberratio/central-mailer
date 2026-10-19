@@ -26,6 +26,18 @@ final class EmailRequestValidatorTest extends TestCase
         $validator->validateQueuePayload($this->payload('recipient@example.com'));
     }
 
+    public function testLogTransportAcceptsReservedExampleDomainsAndSkipsDnsLookups(): void
+    {
+        // Nothing is delivered with MAIL_TRANSPORT=log, so local e2e runs can use @example.com addresses.
+        $validator = new EmailRequestValidator(new Env(['MAIL_TRANSPORT' => 'log', 'EMAIL_VALIDATE_RECIPIENT_MX' => 'true']));
+
+        $result = $validator->validateQueuePayload($this->payload('e2e@example.com'));
+
+        self::assertSame('e2e@example.com', $result['to']);
+        self::assertSame(0, DnsStub::$mxLookupCount);
+        self::assertSame(0, DnsStub::$addressLookupCount);
+    }
+
     public function testSkipsDnsLookupsWhenValidationIsDisabled(): void
     {
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
