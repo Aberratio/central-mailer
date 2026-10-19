@@ -7,7 +7,7 @@ use CentralMailer\Config\ProductionConfigValidator;
 use CentralMailer\Client\ClientRepository;
 use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Database\Connection;
-use CentralMailer\Email\SmtpEmailProvider;
+use CentralMailer\Email\MailTransport;
 use CentralMailer\Logging\LoggerFactory;
 use CentralMailer\Queue\EmailQueueRepository;
 use CentralMailer\Queue\EmailWorker;
@@ -39,7 +39,7 @@ $repository = new EmailQueueRepository($pdo);
 
 $worker = new EmailWorker(
     $repository,
-    new SmtpEmailProvider($env),
+    MailTransport::createProvider($env, 'standard', $root),
     new RateLimiter(new RateLimitRepository($pdo), $env),
     $logger,
     $env,
