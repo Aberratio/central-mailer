@@ -35,6 +35,7 @@ For production: `APP_DEBUG=false`, HTTPS `APP_URL`, explicit CORS origins, `APP_
 | `APP_DOCS_ENABLED` / `APP_DOCS_PUBLIC` | Swagger UI availability (disable in production) |
 | `DB_*` | MySQL/MariaDB connection |
 | `API_KEY_APP_A`, `API_KEY_APP_B` | Legacy per-app API keys (seeded into `email_clients`) |
+| `ZMIERZYMY_CZAS_API_KEY` | Dedicated API key of the `zmierzymy-czas` client (source_app `zmierzymy-czas`, row created by migration 014, key hash synced from this variable at startup; min 32 chars in production) |
 | `SMTP_*` | Primary SMTP account (standard queue) |
 | `GMAIL_SMTP_*`, `GMAIL_FROM_EMAIL`, `TECHNICAL_EMAIL_FALLBACK_TO_STANDARD` | Gmail SMTP account (technical queue) and fallback behaviour |
 | `EMAIL_RATE_LIMIT_*`, `EMAIL_ENQUEUE_RATE_LIMIT_*`, `GMAIL_RATE_LIMIT_*` | Global, enqueue, and Gmail sending rate limits |
