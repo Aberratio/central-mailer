@@ -547,6 +547,16 @@ HTML;
                                 'description' => 'Opcjonalny identyfikator kontekstu (np. id zawodow) do pozniejszego grupowego odczytu statusow przez GET /emails/context/{contextId}.',
                                 'example' => 'evt-123',
                             ],
+                            'replyTo' => [
+                                'type' => 'object',
+                                'nullable' => true,
+                                'required' => ['email'],
+                                'description' => 'Opcjonalny adres Reply-To tej wiadomosci. Gdy podany, zastepuje globalny reply-to uslugi (dla SMTP, Gmail i transportu log); gdy pominiety, obowiazuje globalny. Wchodzi do skrotu zadania (Idempotency-Key z innym `replyTo` zwraca 409). Nieobslugiwane w `POST /emails/batch`.',
+                                'properties' => [
+                                    'email' => ['type' => 'string', 'format' => 'email', 'maxLength' => 255, 'example' => 'organizator@klub.example'],
+                                    'name' => ['type' => 'string', 'nullable' => true, 'maxLength' => 255, 'example' => 'Klub Biegowy'],
+                                ],
+                            ],
                             'metadata' => [
                                 'type' => 'object',
                                 'nullable' => true,

@@ -487,6 +487,49 @@ final class EmailRequestValidatorTest extends TestCase
         ]);
     }
 
+    public function testNormalizesOptionalReplyTo(): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $none = $validator->validateQueuePayload($this->payload('recipient@deliverable.test'));
+        $full = $validator->validateQueuePayload([
+            ...$this->payload('recipient@deliverable.test'),
+            'replyTo' => ['email' => ' organizer@club.test ', 'name' => ' Klub Biegowy '],
+        ]);
+        $emailOnly = $validator->validateQueuePayload([
+            ...$this->payload('recipient@deliverable.test'),
+            'replyTo' => ['email' => 'organizer@club.test'],
+        ]);
+
+        self::assertNull($none['replyTo']);
+        self::assertSame(['email' => 'organizer@club.test', 'name' => 'Klub Biegowy'], $full['replyTo']);
+        self::assertSame(['email' => 'organizer@club.test', 'name' => null], $emailOnly['replyTo']);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidReplyTo')]
+    public function testRejectsInvalidReplyTo(mixed $replyTo): void
+    {
+        $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('replyTo');
+
+        $validator->validateQueuePayload([...$this->payload('recipient@deliverable.test'), 'replyTo' => $replyTo]);
+    }
+
+    /** @return array<string, array{mixed}> */
+    public static function invalidReplyTo(): array
+    {
+        return [
+            'string instead of object' => ['organizer@club.test'],
+            'missing email' => [['name' => 'Klub']],
+            'bad email format' => [['email' => 'not-an-email']],
+            'name not a string' => [['email' => 'organizer@club.test', 'name' => ['x']]],
+            'header injection in name' => [['email' => 'organizer@club.test', 'name' => "Klub\r\nBcc: evil@x.test"]],
+            'name too long' => [['email' => 'organizer@club.test', 'name' => str_repeat('a', 256)]],
+        ];
+    }
+
     private function payload(string $to): array
     {
         return [

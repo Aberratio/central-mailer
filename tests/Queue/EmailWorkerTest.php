@@ -344,6 +344,36 @@ final class EmailWorkerTest extends DatabaseTestCase
         self::assertSame("Body\n\n--\nFooter\nExample", $provider->message->text);
     }
 
+    public function testPassesStoredReplyToToProvider(): void
+    {
+        $this->insertQueueRow(['reply_to_email' => 'organizer@club.test', 'reply_to_name' => 'Klub']);
+        $provider = new class implements EmailProviderInterface {
+            public ?EmailMessage $message = null;
+
+            public function send(EmailMessage $message): EmailSendResult
+            {
+                $this->message = $message;
+
+                return new EmailSendResult('<message@mailer.test>');
+            }
+        };
+        $env = new Env(['EMAIL_WORKER_BATCH_SIZE' => '1']);
+        $worker = new EmailWorker(
+            $this->repository,
+            $provider,
+            new RateLimiter(new RateLimitRepository($this->pdo), $env),
+            new NullLogger(),
+            $env,
+            $this->attachmentStorage,
+            'standard'
+        );
+
+        $worker->runOnce();
+
+        self::assertSame('organizer@club.test', $provider->message?->replyToEmail);
+        self::assertSame('Klub', $provider->message?->replyToName);
+    }
+
     public function testStandardWorkerDoesNotSendTechnicalEmail(): void
     {
         $technicalId = $this->insertQueueRow(['priority' => 'technical']);

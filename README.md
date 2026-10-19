@@ -85,7 +85,7 @@ Swagger UI: `http://localhost:8080/docs` (raw spec at `/openapi.json`, both unau
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/emails` | Queue one email (optional `Idempotency-Key`, attachments, `priority`) |
+| POST | `/emails` | Queue one email (optional `Idempotency-Key`, attachments, `priority`, `replyTo`) |
 | POST | `/emails/batch` | Queue one email per recipient, sharing common subject/body |
 | GET | `/emails/{id}` | Get status of one message (own application only) |
 | GET | `/emails/{id}/events` | Status/event history for one message |
@@ -112,6 +112,8 @@ Scheduling order: effective high priority → weighted fairness between clients 
 Retries use exponential backoff (60s doubling to 3600s) with jitter. Permanent SMTP rejections (5xx, except 552) fail immediately; hard bounces (`5.1.*`, `5.2.1`) also add the address to the suppression list. The suppression list blocks sending to dead/opted-out addresses at both enqueue and send time.
 
 The sender name, reply-to, logo, and footer are configured once in `src/Email/EmailBrandConfig.php` and applied by the worker at send time.
+
+A single email (`POST /emails`) may carry its own `replyTo` (`{"email": "...", "name": "..."}`; `name` optional). When present it replaces the global reply-to for that message with every transport (SMTP, Gmail, log), is stored with the message (migration `013`) so retries keep it, and is part of the idempotency request hash (same `Idempotency-Key` with a different `replyTo` returns `409`). Batches do not support it.
 
 ## Lokalny e2e
 

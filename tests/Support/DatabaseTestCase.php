@@ -43,6 +43,8 @@ abstract class DatabaseTestCase extends TestCase
             'priority' => 'normal',
             'category' => 'transactional',
             'context_id' => null,
+            'reply_to_email' => null,
+            'reply_to_name' => null,
             'metadata' => null,
             'status' => 'pending',
             'lease_id' => null,
@@ -61,10 +63,10 @@ abstract class DatabaseTestCase extends TestCase
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO email_queue
-             (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body, text_body, priority, category, context_id, metadata, status,
+             (id, source_app, idempotency_key, request_hash, message_id, batch_id, recipient_email, subject, html_body, text_body, priority, category, context_id, reply_to_email, reply_to_name, metadata, status,
               lease_id, lease_expires_at, attempts, max_attempts, next_attempt_at, last_error, provider_message_id, created_at, updated_at, sent_at, sent_queue)
              VALUES
-             (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :context_id, :metadata, :status,
+             (:id, :source_app, :idempotency_key, :request_hash, :message_id, :batch_id, :recipient_email, :subject, :html_body, :text_body, :priority, :category, :context_id, :reply_to_email, :reply_to_name, :metadata, :status,
               :lease_id, :lease_expires_at, :attempts, :max_attempts, :next_attempt_at, :last_error, :provider_message_id, :created_at, :updated_at, :sent_at, :sent_queue)'
         );
         $stmt->execute($row);
@@ -98,6 +100,8 @@ abstract class DatabaseTestCase extends TestCase
                 priority TEXT NOT NULL,
                 category TEXT NOT NULL DEFAULT \'transactional\',
                 context_id TEXT NULL,
+                reply_to_email TEXT NULL,
+                reply_to_name TEXT NULL,
                 metadata TEXT NULL,
                 status TEXT NOT NULL,
                 lease_id TEXT NULL,
