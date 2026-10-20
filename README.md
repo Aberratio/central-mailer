@@ -96,7 +96,7 @@ Swagger UI: `http://localhost:8080/docs` (raw spec at `/openapi.json`, both unau
 | POST | `/admin/suppressions` | Manage the suppression list |
 | GET | `/admin/status` | Worker heartbeats, limits configuration |
 | GET | `/admin/stats/sent` | Sent-message statistics by app/worker/time bucket |
-| GET | `/health` | Liveness (`?strict=1` returns 503 on stale worker heartbeats) |
+| GET | `/health` | Liveness and the deployed `version`/`commit` (`?strict=1` returns 503 on stale worker heartbeats) |
 
 `Idempotency-Key` is optional but recommended: a repeated request with the same key and application returns the existing message (`200`); the same key with different content returns `409`.
 
