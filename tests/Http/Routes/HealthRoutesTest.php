@@ -27,6 +27,8 @@ final class HealthRoutesTest extends DatabaseTestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('degraded', $payload['status']);
         self::assertSame('degraded', $payload['checks']['workers']);
+        self::assertArrayHasKey('version', $payload);
+        self::assertArrayHasKey('commit', $payload);
     }
 
     public function testHealthIsOkWithFreshStandardAndTechnicalWorkerHeartbeats(): void

@@ -8,6 +8,7 @@ use CentralMailer\Attachment\AttachmentStorage;
 use CentralMailer\Config\Env;
 use CentralMailer\Http\ApiVersion;
 use CentralMailer\Queue\WorkerHeartbeatRepository;
+use CentralMailer\Support\ReleaseInfo;
 use PDO;
 use Psr\Http\Message\ResponseInterface;
 use Slim\App;
@@ -31,9 +32,12 @@ final class HealthRoutes
             $freshSince = (new \DateTimeImmutable(sprintf('-%d seconds', $freshSeconds)))->format('Y-m-d H:i:s');
             $workerCounts = $container->get(WorkerHeartbeatRepository::class)->activeCountsSince($freshSince);
             $workersOk = $workerCounts['standard'] > 0 && $workerCounts['technical'] > 0;
+            $release = ReleaseInfo::fromFile(dirname(__DIR__, 3) . '/.release');
             $response->getBody()->write(json_encode([
                 'status' => $workersOk ? 'ok' : 'degraded',
                 'apiVersion' => ApiVersion::VERSION,
+                'version' => $release['version'],
+                'commit' => $release['commit'],
                 'checks' => [
                     'database' => 'ok',
                     'attachments' => 'writable',

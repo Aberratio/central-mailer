@@ -491,6 +491,18 @@ HTML;
                                 'type' => 'string',
                                 'example' => ApiVersion::VERSION,
                             ],
+                            'version' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'description' => 'Deployed release; null when not deployed from a release tag.',
+                                'example' => '2026.10.0',
+                            ],
+                            'commit' => [
+                                'type' => 'string',
+                                'nullable' => true,
+                                'description' => 'Short SHA of the deployed commit; null outside deploys.',
+                                'example' => '5d3e47e',
+                            ],
                             'checks' => [
                                 'type' => 'object',
                                 'additionalProperties' => ['type' => 'string'],

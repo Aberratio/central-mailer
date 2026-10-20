@@ -16,6 +16,7 @@ and deployed.
   it, and is part of the idempotency hash. Batches do not support it.
 - `log` mail transport (`MAIL_TRANSPORT=log`) for local end-to-end runs; it
   also accepts reserved example domains.
+- `/health` reports the deployed `version` and `commit`.
 
 ## [2026.09.0] - 2026-09-20
 
