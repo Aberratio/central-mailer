@@ -11,6 +11,9 @@ and deployed.
 
 ### Added
 
+- Dedicated `zmierzymy-czas` API client (migration 014). Its key comes only
+  from `ZMIERZYMY_CZAS_API_KEY` (at least 32 characters in production); until
+  the variable is set nobody can authenticate as this client.
 - Optional per-message `replyTo` on `POST /emails`. It overrides the global
   reply-to for every transport, is stored with the message so retries keep
   it, and is part of the idempotency hash. Batches do not support it.

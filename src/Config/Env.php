@@ -61,6 +61,7 @@ final class Env
         return array_filter([
             'app-a' => $this->nullableString('API_KEY_APP_A'),
             'app-b' => $this->nullableString('API_KEY_APP_B'),
+            'zmierzymy-czas' => $this->nullableString('ZMIERZYMY_CZAS_API_KEY'),
         ]);
     }
 }
