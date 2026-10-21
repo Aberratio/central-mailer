@@ -1,4 +1,4 @@
--- M-04: dedicated `zmierzymy-czas` client (until now the app shared API_KEY_APP_A/B).
+-- Dedicated `zmierzymy-czas` client (until now the app shared API_KEY_APP_A/B).
 -- The real key is NEVER stored in SQL: ClientRepository::syncLegacyClients() replaces the
 -- hash from ZMIERZYMY_CZAS_API_KEY at startup. Until that variable is set the row carries an
 -- unguessable random hash, so nobody can authenticate as this client. Idempotent (PK source_app).

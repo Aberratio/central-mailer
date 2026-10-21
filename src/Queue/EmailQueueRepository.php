@@ -168,8 +168,8 @@ final class EmailQueueRepository
                     ? null
                     : json_encode($recipient['metadata'], JSON_THROW_ON_ERROR);
                 $suppressed = in_array(mb_strtolower((string) $recipient['to']), $suppressedRecipients, true);
-                // Odbiorca odrzucony przez walidacje adresu ladu je jako terminalny 'failed',
-                // tak samo jak zablokowany — zamiast wywracac cala paczke bledem 422.
+                // A recipient rejected by address validation lands as a terminal 'failed' row,
+                // just like a suppressed one, instead of failing the whole batch with a 422.
                 $invalidReason = isset($recipient['invalidReason']) && is_string($recipient['invalidReason'])
                     ? $recipient['invalidReason']
                     : null;

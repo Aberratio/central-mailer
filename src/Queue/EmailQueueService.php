@@ -102,8 +102,8 @@ final class EmailQueueService
         foreach ($validated['recipients'] as $index => $recipient) {
             $emailId = Uuid::v4();
             $validated['recipients'][$index]['id'] = $emailId;
-            // Odbiorca odrzucony przez walidacje adresu powstaje od razu jako 'failed' — nie ma
-            // po co zapisywac jego zalacznikow na dysk.
+            // A recipient rejected by address validation is created as 'failed' right away, so
+            // there is no point storing its attachments on disk.
             if (($recipient['invalidReason'] ?? null) !== null) {
                 $validated['recipients'][$index]['attachments'] = [];
                 continue;
