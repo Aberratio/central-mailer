@@ -28,8 +28,8 @@ final class EmailRequestValidator
 
     /**
      * @param array<string, mixed> $payload
-     * @param bool $validateRecipient batch waliduje adresy osobno, per odbiorca — tam wspolna
-     *                                czesc payloadu nie moze przewracac sie na adresie odbiorcy nr 0
+     * @param bool $validateRecipient a batch validates addresses per recipient, so the shared
+     *                                part of the payload must not fail on recipient #0's address
      */
     public function validateQueuePayload(
         array $payload,
@@ -155,11 +155,11 @@ final class EmailRequestValidator
                 throw new \InvalidArgumentException(sprintf('Recipient attachments at index %d exceed the %d byte limit', $index, $maxBytes));
             }
 
-            // Jeden bledny adres nie moze przepasc calej paczki. Przy wysylce masowej (setki
-            // adresow z importu CSV) literowka w domenie jest pewnikiem, a odrzucenie batcha
-            // 422 oznaczalo, ze nikt z tej paczki nie dostaje maila. Nieprawidlowego odbiorce
-            // zapisujemy wiec jako 'failed' — dokladnie jak adres z listy zablokowanych —
-            // zeby wolajacy zobaczyl go w statusie paczki i mogl poprawic dane.
+            // One bad address must not sink the whole batch. In a bulk send (hundreds of
+            // addresses from a CSV import) a typo in a domain is a certainty, and rejecting the
+            // batch with a 422 meant nobody in it got the e-mail. An invalid recipient is
+            // therefore stored as 'failed', exactly like a suppressed address, so the caller
+            // sees it in the batch status and can correct the data.
             $invalidReason = null;
             try {
                 $to = $this->email($recipient['to'] ?? null);
@@ -175,8 +175,8 @@ final class EmailRequestValidator
                 'subject' => $subject,
                 'html' => $html,
                 'text' => $text,
-                // Dla odrzuconego odbiorcy nie ma po co zapisywac zalacznikow na dysk —
-                // rekord i tak powstaje od razu jako terminalny.
+                // No point storing attachments for a rejected recipient; the row is
+                // created as terminal anyway.
                 'attachments' => $invalidReason === null ? $recipientAttachments : [],
             ];
         }
@@ -274,8 +274,8 @@ final class EmailRequestValidator
     }
 
     /**
-     * Etykieta odrzuconego adresu zapisywana w recipient_email (VARCHAR(255) NOT NULL), zeby
-     * operator zobaczyl w statusie paczki, ktory wiersz importu wymaga poprawki.
+     * Label of a rejected address, stored in recipient_email (VARCHAR(255) NOT NULL) so the
+     * operator can see in the batch status which import row needs fixing.
      */
     private function invalidRecipientLabel(mixed $value): string
     {

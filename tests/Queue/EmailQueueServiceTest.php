@@ -78,8 +78,8 @@ final class EmailQueueServiceTest extends DatabaseTestCase
 
     public function testBatchQueuesValidRecipientsEvenWhenOneAddressIsInvalid(): void
     {
-        // Sedno poprawki: przy 1600 adresach z importu literowka jest pewnikiem, a wczesniej
-        // odrzucala cala paczke bledem 422 - nikt z niej nie dostawal maila.
+        // With 1600 imported addresses a typo is a certainty, and it used to reject the
+        // whole batch with a 422, so nobody in it got the e-mail.
         $result = $this->service->enqueueBatch('app-a', [
             'subject' => 'Kody QR',
             'html' => '<p>QR</p>',
@@ -130,7 +130,7 @@ final class EmailQueueServiceTest extends DatabaseTestCase
         self::assertSame('invalid_recipient', $event['error_code']);
         self::assertSame('Recipient email is invalid', $event['error_message']);
 
-        // Worker claimuje tylko pending/retry - odrzucony wiersz jest terminalny.
+        // The worker only claims pending/retry rows; the rejected row is terminal.
         $claimed = $this->repository->claimBatch(10, 300, 900, 'standard');
         self::assertSame(['ok@deliverable.test'], array_column($claimed, 'recipient_email'));
     }

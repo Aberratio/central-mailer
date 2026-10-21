@@ -46,7 +46,7 @@ For production: `APP_DEBUG=false`, HTTPS `APP_URL`, explicit CORS origins, `APP_
 | `BACKUP_RETENTION_DAYS`, `BACKUP_ENCRYPTION_KEY` | Database backups |
 | `UNSUBSCRIBE_SECRET(_PREVIOUS)` | HMAC secret for one-click unsubscribe links |
 | `LOG_LEVEL`, `LOG_DIR`, `LOG_MAX_FILES` | Logging (empty `LOG_DIR` uses `storage/logs`) |
-| `MAIL_TRANSPORT`, `MAIL_LOG_DIR` | `smtp` (default) or `log` (local/testing only, writes `.eml` files; see "Lokalny e2e") |
+| `MAIL_TRANSPORT`, `MAIL_LOG_DIR` | `smtp` (default) or `log` (local/testing only, writes `.eml` files; see "Local end-to-end run") |
 
 The `email_clients` table is the source of truth for authentication, activation, queue weight, and per-client rate limits — the backend never trusts the `sourceApp` field from the request body. Legacy `.env` keys are auto-seeded/rotated into `email_clients` on startup.
 
@@ -79,6 +79,17 @@ composer technical-worker   # Gmail worker — or: php bin/technical-worker.php
 ```
 
 Run exactly one technical worker to preserve strict FIFO ordering for `technical` messages.
+
+## Project layout
+
+- `bin/` holds the long-running workers (`worker.php`, `technical-worker.php`). They loop until stopped (SIGTERM, stop file, or max runtime) and are run by systemd or cron.
+- `scripts/` holds one-shot jobs that run once and exit: migrations, config validation, tests, queue monitoring, bounce processing, and retention cleanup.
+- `public/admin.html` (the admin panel) is intentionally a single dependency-free file: plain HTML, CSS and JavaScript with no build step and no external assets. Its UI text is in Polish.
+- The example environment file is named `.example.env` rather than `.env.example` because `.gitignore` ignores `/.env*`; deploy documentation refers to this name.
+
+## License
+
+All rights reserved. The source is published for portfolio and review purposes only; see [LICENSE](LICENSE).
 
 ## API
 
@@ -116,7 +127,7 @@ The sender name, reply-to, logo, and footer are configured once in `src/Email/Em
 
 A single email (`POST /emails`) may carry its own `replyTo` (`{"email": "...", "name": "..."}`; `name` optional). When present it replaces the global reply-to for that message with every transport (SMTP, Gmail, log), is stored with the message (migration `013`) so retries keep it, and is part of the idempotency request hash (same `Idempotency-Key` with a different `replyTo` returns `409`). Batches do not support it.
 
-## Lokalny e2e
+## Local end-to-end run
 
 For local end-to-end tests (e.g. an application talking to a locally running Central Mailer) no real SMTP account is needed: the `log` transport builds the complete MIME message (headers including `Reply-To`, subject, HTML/text, attachments and inline images) and writes it to an `.eml` file instead of sending it. The worker reports success just like a real provider, so statuses, retries and idempotency behave normally. It works for both the standard and the `technical` queue.
 

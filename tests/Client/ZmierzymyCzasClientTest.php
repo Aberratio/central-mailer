@@ -9,7 +9,7 @@ use CentralMailer\Config\Env;
 use CentralMailer\Config\ProductionConfigValidator;
 use CentralMailer\Tests\Support\DatabaseTestCase;
 
-/** M-04: dedykowany klient `zmierzymy-czas` z kluczem tylko ze zmiennej ZMIERZYMY_CZAS_API_KEY. */
+/** Dedicated `zmierzymy-czas` client whose key comes only from the ZMIERZYMY_CZAS_API_KEY variable. */
 final class ZmierzymyCzasClientTest extends DatabaseTestCase
 {
     public function testEnvExposesDedicatedKeyUnderItsOwnSourceApp(): void

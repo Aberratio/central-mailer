@@ -345,8 +345,8 @@ final class EmailRequestValidatorTest extends TestCase
 
     public function testBatchSurvivesInvalidRecipientAtIndexZero(): void
     {
-        // Regresja: wspolna czesc payloadu walidowala adres odbiorcy nr 0 i wywracala
-        // cala paczke, zanim petla po odbiorcach w ogole ruszyla.
+        // Regression: the shared part of the payload validated recipient #0's address and
+        // failed the whole batch before the per-recipient loop even started.
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
 
         $result = $validator->validateBatchPayload([
@@ -429,8 +429,8 @@ final class EmailRequestValidatorTest extends TestCase
 
     public function testInvalidRecipientLabelFitsTheRecipientEmailColumn(): void
     {
-        // recipient_email to VARCHAR(255) NOT NULL - dluga sieczka z importu nie moze
-        // wywrocic INSERT-a calej paczki.
+        // recipient_email is VARCHAR(255) NOT NULL; a long garbage string from an import must
+        // not break the INSERT of the whole batch.
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
 
         $result = $validator->validateBatchPayload([
@@ -476,7 +476,7 @@ final class EmailRequestValidatorTest extends TestCase
 
     public function testSingleSendStillRejectsAnInvalidRecipient(): void
     {
-        // Pojedyncza wysylka nie ma dokad zdegradowac bledu - musi dalej zwracac 422.
+        // A single send has nowhere to downgrade the error to; it must keep returning 422.
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
 
         $this->expectException(\InvalidArgumentException::class);
@@ -487,7 +487,7 @@ final class EmailRequestValidatorTest extends TestCase
 
     public function testBatchStillRejectsPayloadLevelProblems(): void
     {
-        // Luzniejsza walidacja adresow nie moze przepuszczac zepsutego payloadu paczki.
+        // Relaxed address validation must not let a broken batch payload through.
         $validator = new EmailRequestValidator(new Env(['EMAIL_VALIDATE_RECIPIENT_MX' => 'false']));
 
         $this->expectException(\InvalidArgumentException::class);
